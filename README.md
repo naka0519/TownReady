@@ -34,4 +34,336 @@
 - **バック**: FastAPI (Python) → Cloud Run
 - **ジョブ**: Pub/Sub + ワーカー（Content 生成など重い処理）
 - **データ**: Firestore（案件/ジョブ/メタ）、GCS（生成物）
-- **AI**: Vertex AI（Gemini 2.0 Pro / Imagen
+- **AI**: Vertex AI（Gemini 2.0 Pro / Imagen / Veo / Agent Builder or ADK）、Vertex AI Search（KB）
+
+```
+[Next.js] ⇄ [FastAPI] → Pub/Sub → [Worker]
+   │                         │
+   │                         ├─ Vertex AI (Gemini/Imagen/Veo/Agent)
+   │                         └─ Vertex AI Search (KB)
+   └─ GCS(画像/動画)・Firestore(メタ)・Auth
+```
+
+---
+
+## ディレクトリ構成（提案）
+
+```
+.
+├─ api/                 # FastAPI エンドポイント
+├─ workers/             # Pub/Sub ワーカー（Content生成など）
+├─ web/                 # Next.js フロント
+├─ schemas/             # JSON Schema / Pydantic モデル
+├─ docs/                # プロダクト仕様・運用ドキュメント
+├─ kb/                  # 知識ベース（Markdown/URLカタログ）
+├─ infra/               # IaC（任意: Terraform）/ デプロイスクリプト
+├─ .env.example         # 環境変数のサンプル
+└─ README.md
+```
+
+---
+
+## API（抜粋）
+
+- `POST /api/generate/plan` — Coordinator 起動（シナリオ候補 & 要件）
+- `POST /api/generate/scenario` — 台本・役割・導線生成
+- `POST /api/review/safety` — 安全レビュー（KB 根拠）
+- `POST /api/generate/content` — 画像/動画生成（Imagen/Veo）
+- `GET  /api/jobs/{job_id}` — ジョブ状態
+- `POST /webhook/forms` — アンケート集計受信
+- `POST /webhook/checkin` — 参加者チェックイン受信
+
+**Request 例**
+
+```json
+{
+  "location": { "address": "横浜市瀬谷区＊＊＊", "lat": 35.47, "lng": 139.49 },
+  "participants": {
+    "total": 120,
+    "children": 25,
+    "elderly": 18,
+    "wheelchair": 3,
+    "languages": ["ja", "en"]
+  },
+  "hazard": {
+    "types": ["earthquake", "fire"],
+    "drill_date": "2025-10-12",
+    "indoor": true,
+    "nighttime": false
+  },
+  "constraints": { "max_duration_min": 45, "limited_outdoor": true },
+  "kb_refs": ["kb://yokohama_guideline", "kb://shelter_rules"]
+}
+```
+
+---
+
+## エージェント設計（要点）
+
+- **Coordinator**: 入力 → 要件分解 → シナリオ候補 → ハンドオフ。
+- **Scenario**: 台本(MD)/役割(CSV)/導線(GeoJSON)を生成。
+- **Safety**: ガイドライン適合チェック（根拠アンカー必須）。
+- **Content**: ポスター(Imagen)・60 秒 VTR(Veo)・多言語素材の生成。
+
+### 共通スキーマ（抜粋）
+
+```json
+{
+  "Location": {
+    "address": "string",
+    "lat": "number",
+    "lng": "number",
+    "site_map_url": "string",
+    "geojson": "object"
+  },
+  "Participants": {
+    "total": "int",
+    "children": "int",
+    "elderly": "int",
+    "wheelchair": "int",
+    "languages": ["string"]
+  },
+  "HazardSpec": {
+    "types": ["earthquake", "fire", "flood", "tsunami", "landslide"],
+    "drill_date": "date",
+    "indoor": "bool",
+    "nighttime": "bool"
+  },
+  "Assets": {
+    "script_md": "string",
+    "roles_csv": "string",
+    "routes": [
+      {
+        "name": "string",
+        "points": [{ "lat": 0, "lng": 0, "label": "A" }],
+        "accessibility_notes": "string"
+      }
+    ],
+    "poster_prompts": ["string"],
+    "video_prompt": "string",
+    "video_shotlist": [{}],
+    "languages": ["string"]
+  },
+  "KPIPlan": {
+    "targets": {
+      "attendance_rate": 0.6,
+      "avg_evac_time_sec": 300,
+      "quiz_score": 0.7
+    },
+    "collection": ["checkin", "route_time", "post_quiz", "issue_log"]
+  }
+}
+```
+
+---
+
+## セットアップ
+
+### 前提
+
+- GCP プロジェクト / Billing 有効
+- Vertex AI, Artifact Registry, Cloud Run, Pub/Sub, Firestore, GCS 有効化
+- Node.js 20+, Python 3.11+
+
+### 環境変数（`.env` サンプル）
+
+```
+GCP_PROJECT=your-project
+REGION=asia-northeast1
+FIRESTORE_DB=townready
+GCS_BUCKET=gs://your-bucket
+VAI_LOCATION=asia-northeast1
+IMAGEN_MODEL=imagen-3.0
+VEO_MODEL=veo-2.0
+GEMINI_MODEL=gemini-2.0-pro
+KB_DATASET=kb_default
+```
+
+### ローカル起動（例）
+
+```bash
+# API
+cd api && uvicorn app:app --reload --port 8080
+# Web
+cd web && npm i && npm run dev -- --port 3000
+```
+
+### デプロイ（Cloud Run, 例）
+
+```bash
+# API
+gcloud builds submit --tag asia-northeast1-docker.pkg.dev/$GCP_PROJECT/app/api:latest api/
+gcloud run deploy townready-api \
+  --image=asia-northeast1-docker.pkg.dev/$GCP_PROJECT/app/api:latest \
+  --region=$REGION --allow-unauthenticated
+
+# Web
+gcloud builds submit --tag asia-northeast1-docker.pkg.dev/$GCP_PROJECT/app/web:latest web/
+gcloud run deploy townready-web \
+  --image=asia-northeast1-docker.pkg.dev/$GCP_PROJECT/app/web:latest \
+  --region=$REGION --allow-unauthenticated
+```
+
+---
+
+## セキュリティ & プライバシー
+
+- 名簿等の**個人情報は収集せず**、チェックインは匿名 ID/集計単位で保存。
+- GCS/Firestore の**リージョン内保管**、アクセスは最小権限（IAM）。
+- 生成物に**注意書きと根拠**を付与。レビュー未通過のシナリオは配布不可。
+
+---
+
+## ライセンス
+
+- 仮: Apache-2.0（検討中）
+
+---
+
+## 開発ロードマップ（MVP → α）
+
+1. Schema & Contract / JSON 出力強制
+2. Coordinator/Scenario/Safety/Content の順で実装
+3. Imagen/Veo を**ダミー → 本番 API**に段階的切替
+4. KPI ダッシュボード・改善提案の自動化
+
+---
+
+# docs/TownReady_Spec.md
+
+## 1. 背景と課題
+
+- 訓練の**企画工数が高い**（台本・役割・導線・掲示の個別作成）。
+- **参加と学習定着が弱い**（若年層/多言語/視覚教材不足）。
+- **評価 → 改善のループ不全**（ログ・KPI が残らない）。
+
+## 2. ターゲット（初期アーリーアダプター）
+
+- 表彰実績や実証に前向きな **自治会・地域ネットワーク**。
+- 多言語/体験型訓練を重視する **自治体 防災担当**。
+- 教育効果を検証したい **学校・大学**。
+- 年数回訓練を回す **ビル/エリア管理**。
+
+## 3. JTBD
+
+- **状況**: 年 1–数回の訓練を企画、参加属性・場所が毎回変わる。
+- **動機**: 現場で迷わない訓練を短時間で作り、参加率と理解度を上げたい。
+- **障害**: 手作業/多言語/配慮/根拠・KPI 不足。
+- **完了定義**: “地域専用の一式”＋“KPI 測定”＋“次回改善案”。
+
+## 4. ソリューション概要
+
+- **4 エージェント連携**（Coordinator/Scenario/Safety/Content）
+- **Imagen**: A4 ポスター多言語生成 / **Veo**: 60 秒 VTR 生成
+- **KB**: ガイドライン・避難所・施設情報を Vertex AI Search に格納
+- **KPI**: 参加率/到達時間/理解度 → 改善提案
+
+## 5. 非機能要件（MVP）
+
+- **速度**: 入力 → 生成 ≤10 分
+- **正確性**: 出典リンク・KB アンカー必須、自治体様式互換
+- **安全性**: PII 最小化、監査ログ、レビュー未通過は配布不可
+
+## 6. エージェント I/O（詳細）
+
+### 6.1 Coordinator（入力 →PlanSpec）
+
+- 入力: Location / Participants / Hazard / constraints / kb_refs
+- 出力: PlanSpec（シナリオ候補、KPIPlan、必須要件、ハンドオフ）
+- 事前検証: 欠損項目、時間超過、屋外制限等
+
+### 6.2 Scenario（PlanSpec→ScenarioBundle）
+
+- 台本(Markdown) / 役割(CSV) / 導線(GeoJSON)
+- ルート: 車椅子・子ども対応、分刻みタイムライン
+
+### 6.3 Safety（ScenarioBundle→SafetyReview）
+
+- severity / issue / fix / 根拠(KB アンカー)
+- patched（差し替え済み）を返却
+
+### 6.4 Content（patched→ContentPackage）
+
+- ポスター（A4, 言語別, 注意書き）
+- 60 秒 VTR（字幕日英、ショットリストに沿う）
+- script.md / roles.csv / geojson のエクスポート
+
+#### 6.x JSON 例
+
+```json
+{
+  "scenarios": [
+    {
+      "id": "S1",
+      "title": "地震→火災",
+      "objectives": ["一次避難導線確認", "初期消火"],
+      "languages": ["ja", "en"]
+    }
+  ],
+  "acceptance": {
+    "must_include": ["要配慮者ルート", "多言語掲示", "役割表CSV"],
+    "kpi_plan": {
+      "targets": {
+        "attendance_rate": 0.6,
+        "avg_evac_time_sec": 300,
+        "quiz_score": 0.7
+      },
+      "collection": ["checkin", "route_time", "post_quiz"]
+    }
+  },
+  "handoff": { "to": "Scenario Agent", "with": { "scenario_id": "S1" } }
+}
+```
+
+## 7. API 詳細（OpenAPI 抜粋）
+
+```yaml
+POST /api/generate/plan:
+  requestBody: { application/json: {} }
+  responses:
+    "200": { application/json: { job_id: string, status: string } }
+POST /api/generate/scenario:
+POST /api/review/safety:
+POST /api/generate/content:
+GET  /api/jobs/{job_id}:
+POST /webhook/forms:
+POST /webhook/checkin:
+```
+
+## 8. データモデル（Firestore）
+
+- `workspaces/{ws}/drills/{drill}`: 入力、言語、ハザード
+- `jobs/{job}`: タイプ、ステータス、出力 URI
+- `assets/{drill}`: `poster_*`, `video_*`, `script_md`, `roles_csv`
+- `metrics/{drill}`: `checkins[]`, `quiz[]`, `issue_log[]`
+
+## 9. セキュリティ/プライバシー/運用
+
+- **データ最小化**: 個人名を扱わない。匿名 ID。
+- **IAM 最小権限**: サービス間は SA ごとにスコープ限定。
+- **監査/レート制限**: 生成 API はプロジェクト/WS 単位のクォータ管理。
+- **アセット署名 URL**: 配布期限を短く。
+
+## 10. テスト戦略
+
+- **Contract Test**: JSON Schema で I/O バリデーション。
+- **静的検証**: ルート自己交差/屋外禁止/段差注意を事前検出。
+- **E2E**: 入力 → 一式生成 →DL→Webhook 取込 → 改善提案まで。
+
+## 11. デモシナリオ（90 秒）
+
+1. 住所と属性を入力 → 3 つのシナリオ候補
+2. “地震 → 火災”を選択 → 台本/ルート自動生成
+3. Safety が赤入れ → 一括反映
+4. クリックで**ポスター/60 秒 VTR**生成 → DL & 印刷
+5. 訓練後に QR チェックイン/フォーム受信 → KPI & 改善提案
+
+## 12. ロードマップ
+
+- α: 多言語(ja/en), 地震/火災, A4 ポスター, 60 秒 VTR
+- β: 浸水/土砂対応、視覚支援、エリア横断テンプレ、外部 SaaS 連携
+
+## 13. ライセンス/クレジット
+
+- 仮: Apache-2.0
+- 生成物の権利表示は出力に自動付与（注意書き含む）
