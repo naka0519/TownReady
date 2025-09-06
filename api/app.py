@@ -1,0 +1,174 @@
+from __future__ import annotations
+
+from typing import Any, Dict, List, Optional
+
+from fastapi import FastAPI, HTTPException
+try:
+    # Load .env located at project root for local development
+    from dotenv import load_dotenv
+    from pathlib import Path as _Path
+
+    load_dotenv(_Path(__file__).resolve().parents[1] / ".env")
+except Exception:
+    # dotenv is optional at runtime; environment may already be set
+    pass
+from pydantic import BaseModel
+
+# Try importing shared schemas; add parent dir to path if needed for local runs.
+try:  # run as package: `uvicorn GCP_AI_Agent_hackathon.api.app:app --reload`
+    from GCP_AI_Agent_hackathon.schemas import (
+        Assets,
+        GenerateBaseRequest,
+        HazardSpec,
+    )
+except Exception:  # pragma: no cover - local dev fallback from api/ directory
+    import sys
+    from pathlib import Path
+
+    sys.path.append(str(Path(__file__).resolve().parents[1]))
+    from schemas import Assets, GenerateBaseRequest, HazardSpec  # type: ignore
+
+
+app = FastAPI(title="TownReady API", version="0.1.0")
+
+
+class SafetyReviewRequest(BaseModel):
+    hazard: HazardSpec
+    assets: Assets
+    kb_refs: List[str] = []
+
+
+class ContentRequest(BaseModel):
+    assets: Assets
+    languages: Optional[List[str]] = None
+
+
+@app.get("/healthz")
+def healthz() -> Dict[str, str]:
+    return {"status": "ok"}
+
+
+@app.get("/health/firestore")
+def health_firestore() -> Dict[str, str]:
+    try:
+        try:
+            from GCP_AI_Agent_hackathon.services import JobsStore, Settings
+        except Exception:
+            import sys
+            from pathlib import Path
+
+            sys.path.append(str(Path(__file__).resolve().parents[1]))
+            from services import JobsStore, Settings  # type: ignore
+
+        settings = Settings.load()
+        _ = JobsStore(settings)  # init client
+        return {"status": "ok", "database": settings.firestore_db, "project": settings.project}
+    except Exception as e:  # pragma: no cover
+        return {"status": "error", "message": str(e)}
+
+
+@app.post("/api/generate/plan")
+def generate_plan(payload: GenerateBaseRequest) -> Dict[str, Any]:
+    # Create a job entry for downstream workers to pick up (stub).
+    try:
+        from GCP_AI_Agent_hackathon.services import JobsStore
+    except Exception:
+        import sys
+        from pathlib import Path
+
+        sys.path.append(str(Path(__file__).resolve().parents[1]))
+        from services import JobsStore  # type: ignore
+
+    jobs = JobsStore()
+    job_id = jobs.create(payload.model_dump(), status="queued")
+
+    # Publish a message for workers
+    try:
+        try:
+            from GCP_AI_Agent_hackathon.services import Publisher
+        except Exception:
+            import sys
+            from pathlib import Path
+
+            sys.path.append(str(Path(__file__).resolve().parents[1]))
+            from services import Publisher  # type: ignore
+
+        pub = Publisher()
+        pub.publish_json({"job_id": job_id, "task": "plan"}, attributes={"type": "plan"})
+    except Exception:
+        # Publishing failure should not 500 the request in MVP
+        pass
+
+    return {"job_id": job_id, "status": "queued"}
+
+
+@app.post("/api/generate/scenario")
+def generate_scenario(payload: GenerateBaseRequest) -> Dict[str, Any]:
+    return {
+        "status": "not_implemented",
+        "endpoint": "generate/scenario",
+        "echo": payload.model_dump(),
+    }
+
+
+@app.post("/api/review/safety")
+def review_safety(payload: SafetyReviewRequest) -> Dict[str, Any]:
+    return {
+        "status": "not_implemented",
+        "endpoint": "review/safety",
+        "echo": payload.model_dump(),
+    }
+
+
+@app.post("/api/generate/content")
+def generate_content(payload: ContentRequest) -> Dict[str, Any]:
+    return {
+        "status": "not_implemented",
+        "endpoint": "generate/content",
+        "echo": payload.model_dump(),
+    }
+
+
+@app.get("/api/jobs/{job_id}")
+def get_job(job_id: str) -> Dict[str, Any]:
+    try:
+        from GCP_AI_Agent_hackathon.services import JobsStore
+    except Exception:
+        import sys
+        from pathlib import Path
+
+        sys.path.append(str(Path(__file__).resolve().parents[1]))
+        from services import JobsStore  # type: ignore
+
+    jobs = JobsStore()
+    doc = jobs.get(job_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="job not found")
+    return doc
+
+
+@app.post("/webhook/forms")
+def webhook_forms(payload: Dict[str, Any]) -> Dict[str, str]:
+    return {"status": "received"}
+
+
+@app.post("/webhook/checkin")
+def webhook_checkin(payload: Dict[str, Any]) -> Dict[str, str]:
+    return {"status": "received"}
+@app.get("/api/kb/search")
+def kb_search(q: str, n: int = 3) -> Dict[str, Any]:
+    try:
+        try:
+            from GCP_AI_Agent_hackathon.services.kb_search import KBSearch
+        except Exception:
+            import sys
+            from pathlib import Path
+
+            sys.path.append(str(Path(__file__).resolve().parents[1]))
+            from services.kb_search import KBSearch  # type: ignore
+
+        kb = KBSearch()
+        hits = kb.search(q, page_size=n)
+        return {"status": "ok", "hits": hits}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
