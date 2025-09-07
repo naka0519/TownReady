@@ -45,7 +45,7 @@ gcloud run deploy "$SERVICE" \
   --region="$REGION" \
   --service-account="$SA" \
   --allow-unauthenticated \
-  --port=8080
+  --port=8090
 
 echo "[OK] Deployed. Check the service URL above."
 
