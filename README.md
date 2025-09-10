@@ -65,10 +65,10 @@
 
 ## API（抜粋）
 
-- `POST /api/generate/plan` — Coordinator 起動（シナリオ候補 & 要件）
-- `POST /api/generate/scenario` — 台本・役割・導線生成
-- `POST /api/review/safety` — 安全レビュー（KB 根拠）
-- `POST /api/generate/content` — 画像/動画生成（Imagen/Veo）
+- `POST /api/generate/plan` — Coordinator 起動（シナリオ候補 & 要件）。jobs に記録し Pub/Sub へ発行
+- `POST /api/generate/scenario` — 台本・役割・導線生成（ジョブ化して Pub/Sub へ）
+- `POST /api/review/safety` — 安全レビュー（KB 根拠, ジョブ化）
+- `POST /api/generate/content` — 画像/動画生成（Imagen/Veo, ジョブ化）
 - `GET  /api/jobs/{job_id}` — ジョブ状態
 - `POST /webhook/forms` — アンケート集計受信
 - `POST /webhook/checkin` — 参加者チェックイン受信
@@ -205,6 +205,33 @@ gcloud run deploy townready-web \
 ```
 
 ---
+
+### 動作確認（MVP・ジョブフロー）
+
+```bash
+# 1) プラン生成をキック（例）
+curl -sS -X POST \
+  -H 'Content-Type: application/json' \
+  -d @- https://<YOUR_API_SERVICE>/api/generate/plan <<'JSON'
+{
+  "location": { "address": "横浜市瀬谷区＊＊＊", "lat": 35.47, "lng": 139.49 },
+  "participants": { "total": 120, "children": 25, "elderly": 18, "wheelchair": 3, "languages": ["ja", "en"] },
+  "hazard": { "types": ["earthquake", "fire"], "drill_date": "2025-10-12", "indoor": true, "nighttime": false },
+  "constraints": { "max_duration_min": 45, "limited_outdoor": true },
+  "kb_refs": ["kb://yokohama_guideline", "kb://shelter_rules"]
+}
+JSON
+
+# => {"job_id":"...","status":"queued"}
+
+# 2) ジョブ状態を確認
+curl -sS https://<YOUR_API_SERVICE>/api/jobs/<job_id>
+
+# Worker のヘルス確認（Cloud Run URL）
+curl -i https://<YOUR_WORKER_SERVICE>/health   # 200 で OK
+```
+
+Push 配信（Pub/Sub → Worker）は Cloud Run URL の `/pubsub/push`（POST）へ設定します。
 
 ## セキュリティ & プライバシー
 

@@ -56,7 +56,7 @@ gcloud run deploy "$SERVICE" \
 
 ```bash
 export TOPIC="${PUBSUB_TOPIC:-townready-jobs}"
-export WORKER_URL="https://YOUR-WORKER-RUN-URL"  # 例: https://townready-worker-xxxxx-an.a.run.app
+export WORKER_URL="https://townready-worker-rxazeqylpq-an.a.run.app"  # 例: https://townready-worker-xxxxx-an.a.run.app
 
 gcloud pubsub subscriptions create "${TOPIC}-push" \
   --topic "$TOPIC" \
@@ -70,7 +70,7 @@ gcloud pubsub subscriptions create "${TOPIC}-push" \
 1. 直接 Publish して Ack/Firestore 更新を確認
 
 ```bash
-cat <<MSG | gcloud pubsub topics publish "$TOPIC" --message-attributes=type=plan --message=-
+cat <<MSG | gcloud pubsub topics publish "$TOPIC" --attribute=type=plan --message=-
 {"job_id":"test-123","task":"plan"}
 MSG
 

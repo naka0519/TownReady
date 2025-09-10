@@ -43,8 +43,14 @@ class ContentRequest(BaseModel):
     languages: Optional[List[str]] = None
 
 
-@app.get("/healthz")
-def healthz() -> Dict[str, str]:
+# @app.get("/healthz")
+# def healthz() -> Dict[str, str]:
+#     return {"status": "ok"}
+
+
+# Alias to avoid any potential frontend handling of "/healthz"
+@app.get("/health")
+def health() -> Dict[str, str]:
     return {"status": "ok"}
 
 
@@ -104,29 +110,99 @@ def generate_plan(payload: GenerateBaseRequest) -> Dict[str, Any]:
 
 @app.post("/api/generate/scenario")
 def generate_scenario(payload: GenerateBaseRequest) -> Dict[str, Any]:
-    return {
-        "status": "not_implemented",
-        "endpoint": "generate/scenario",
-        "echo": payload.model_dump(),
-    }
+    # Create job and publish to workers
+    try:
+        from GCP_AI_Agent_hackathon.services import JobsStore
+    except Exception:
+        import sys
+        from pathlib import Path
+
+        sys.path.append(str(Path(__file__).resolve().parents[1]))
+        from services import JobsStore  # type: ignore
+
+    jobs = JobsStore()
+    job_id = jobs.create({"endpoint": "generate/scenario", **payload.model_dump()}, status="queued")
+
+    try:
+        try:
+            from GCP_AI_Agent_hackathon.services import Publisher
+        except Exception:
+            import sys
+            from pathlib import Path
+
+            sys.path.append(str(Path(__file__).resolve().parents[1]))
+            from services import Publisher  # type: ignore
+
+        pub = Publisher()
+        pub.publish_json({"job_id": job_id, "task": "scenario"}, attributes={"type": "scenario"})
+    except Exception:
+        pass
+
+    return {"job_id": job_id, "status": "queued"}
 
 
 @app.post("/api/review/safety")
 def review_safety(payload: SafetyReviewRequest) -> Dict[str, Any]:
-    return {
-        "status": "not_implemented",
-        "endpoint": "review/safety",
-        "echo": payload.model_dump(),
-    }
+    try:
+        from GCP_AI_Agent_hackathon.services import JobsStore
+    except Exception:
+        import sys
+        from pathlib import Path
+
+        sys.path.append(str(Path(__file__).resolve().parents[1]))
+        from services import JobsStore  # type: ignore
+
+    jobs = JobsStore()
+    job_id = jobs.create({"endpoint": "review/safety", **payload.model_dump()}, status="queued")
+
+    try:
+        try:
+            from GCP_AI_Agent_hackathon.services import Publisher
+        except Exception:
+            import sys
+            from pathlib import Path
+
+            sys.path.append(str(Path(__file__).resolve().parents[1]))
+            from services import Publisher  # type: ignore
+
+        pub = Publisher()
+        pub.publish_json({"job_id": job_id, "task": "safety"}, attributes={"type": "safety"})
+    except Exception:
+        pass
+
+    return {"job_id": job_id, "status": "queued"}
 
 
 @app.post("/api/generate/content")
 def generate_content(payload: ContentRequest) -> Dict[str, Any]:
-    return {
-        "status": "not_implemented",
-        "endpoint": "generate/content",
-        "echo": payload.model_dump(),
-    }
+    try:
+        from GCP_AI_Agent_hackathon.services import JobsStore
+    except Exception:
+        import sys
+        from pathlib import Path
+
+        sys.path.append(str(Path(__file__).resolve().parents[1]))
+        from services import JobsStore  # type: ignore
+
+    jobs = JobsStore()
+    job_id = jobs.create({"endpoint": "generate/content", **payload.model_dump()}, status="queued")
+
+    try:
+        try:
+            from GCP_AI_Agent_hackathon.services import Publisher
+        except Exception:
+            import sys
+            from pathlib import Path
+
+            sys.path.append(str(Path(__file__).resolve().parents[1]))
+            from services import Publisher  # type: ignore
+
+        pub = Publisher()
+        pub.publish_json({"job_id": job_id, "task": "content"}, attributes={"type": "content"})
+    except Exception:
+        pass
+
+    return {"job_id": job_id, "status": "queued"}
 
 
 @app.get("/api/jobs/{job_id}")

@@ -21,5 +21,7 @@ COPY . /app
 
 EXPOSE 8080
 
-CMD ["uvicorn", "GCP_AI_Agent_hackathon.workers.server:app", "--host", "0.0.0.0", "--port", "8080"]
-
+# Note: With build context at the repo root (GCP_AI_Agent_hackathon),
+# source is copied under /app (e.g., /app/workers, /app/services).
+# Therefore import path should be `workers.server:app`.
+CMD ["uvicorn", "workers.server:app", "--host", "0.0.0.0", "--port", "8080"]

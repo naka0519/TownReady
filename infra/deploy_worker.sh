@@ -37,7 +37,8 @@ echo "[STEP] Ensure repository: $REPO"
 gcloud artifacts repositories create "$REPO" --repository-format=docker --location="$REGION" || true
 
 echo "[STEP] Build & Push: $IMAGE_URI"
-gcloud builds submit --tag "$IMAGE_URI" workers/
+#gcloud builds submit --tag "$IMAGE_URI" workers/
+gcloud builds submit --config infra/cloudbuild.worker.yaml --substitutions _IMAGE_URI="$IMAGE_URI" .
 
 echo "[STEP] Deploy to Cloud Run: $SERVICE"
 gcloud run deploy "$SERVICE" \
