@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
+import time
 
 from fastapi import FastAPI, HTTPException
 try:
@@ -12,7 +13,7 @@ try:
 except Exception:
     # dotenv is optional at runtime; environment may already be set
     pass
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 # Try importing shared schemas; add parent dir to path if needed for local runs.
 try:  # run as package: `uvicorn GCP_AI_Agent_hackathon.api.app:app --reload`
@@ -35,7 +36,7 @@ app = FastAPI(title="TownReady API", version="0.1.0")
 class SafetyReviewRequest(BaseModel):
     hazard: HazardSpec
     assets: Assets
-    kb_refs: List[str] = []
+    kb_refs: List[str] = Field(default_factory=list)
 
 
 class ContentRequest(BaseModel):
@@ -86,7 +87,11 @@ def generate_plan(payload: GenerateBaseRequest) -> Dict[str, Any]:
         from services import JobsStore  # type: ignore
 
     jobs = JobsStore()
-    job_id = jobs.create(payload.model_dump(), status="queued")
+    try:
+        job_id = jobs.create(payload.model_dump(mode="json"), status="queued")
+    except Exception as e:
+        # Surface error to help diagnose Firestore write issues
+        raise HTTPException(status_code=500, detail=f"firestore_create_failed: {e}")
 
     # Publish a message for workers
     try:
@@ -121,7 +126,10 @@ def generate_scenario(payload: GenerateBaseRequest) -> Dict[str, Any]:
         from services import JobsStore  # type: ignore
 
     jobs = JobsStore()
-    job_id = jobs.create({"endpoint": "generate/scenario", **payload.model_dump()}, status="queued")
+    try:
+        job_id = jobs.create({"endpoint": "generate/scenario", **payload.model_dump(mode="json")}, status="queued")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"firestore_create_failed: {e}")
 
     try:
         try:
@@ -153,7 +161,10 @@ def review_safety(payload: SafetyReviewRequest) -> Dict[str, Any]:
         from services import JobsStore  # type: ignore
 
     jobs = JobsStore()
-    job_id = jobs.create({"endpoint": "review/safety", **payload.model_dump()}, status="queued")
+    try:
+        job_id = jobs.create({"endpoint": "review/safety", **payload.model_dump(mode="json")}, status="queued")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"firestore_create_failed: {e}")
 
     try:
         try:
@@ -185,7 +196,29 @@ def generate_content(payload: ContentRequest) -> Dict[str, Any]:
         from services import JobsStore  # type: ignore
 
     jobs = JobsStore()
-    job_id = jobs.create({"endpoint": "generate/content", **payload.model_dump()}, status="queued")
+    try:
+        job_id = jobs.create({"endpoint": "generate/content", **payload.model_dump(mode="json")}, status="queued")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"firestore_create_failed: {e}")
+
+@app.get("/health/firestore_write")
+def health_firestore_write() -> Dict[str, Any]:
+    """Attempt a minimal write to Firestore to verify permissions."""
+    try:
+        try:
+            from GCP_AI_Agent_hackathon.services import JobsStore
+        except Exception:
+            import sys
+            from pathlib import Path
+            sys.path.append(str(Path(__file__).resolve().parents[1]))
+            from services import JobsStore  # type: ignore
+
+        jobs = JobsStore()
+        # Write to a deterministic doc id to avoid clutter
+        jobs.update_status("_health", "ok", {"ts": int(time.time())})
+        return {"status": "ok"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 
     try:
         try:

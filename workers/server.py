@@ -4,16 +4,24 @@ import base64
 import json
 from typing import Any, Dict
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Header
+from typing import Optional
 
 try:
-    from GCP_AI_Agent_hackathon.services import JobsStore
+    from google.oauth2 import id_token as google_id_token
+    from google.auth.transport import requests as google_requests
+except Exception:  # pragma: no cover - libs should be present via google-cloud deps
+    google_id_token = None  # type: ignore
+    google_requests = None  # type: ignore
+
+try:
+    from GCP_AI_Agent_hackathon.services import JobsStore, Settings
 except Exception:
     import sys
     from pathlib import Path
 
     sys.path.append(str(Path(__file__).resolve().parents[1]))
-    from services import JobsStore  # type: ignore
+    from services import JobsStore, Settings  # type: ignore
 
 
 app = FastAPI(title="TownReady Worker", version="0.1.0")
@@ -35,9 +43,38 @@ def health() -> Dict[str, str]:
     return {"status": "ok"}
 
 
-@app.post("/pubsub/push")
-def pubsub_push(body: Dict[str, Any]) -> Dict[str, str]:
+def _verify_push(authorization: Optional[str]) -> bool:
+    """Verify Pub/Sub OIDC token if enabled via settings.
+
+    Returns True if verification passes or is disabled. False otherwise.
+    """
     try:
+        settings = Settings.load()
+        if not getattr(settings, "push_verify", False):
+            return True
+        if not authorization or not authorization.lower().startswith("bearer "):
+            return False
+        if google_id_token is None or google_requests is None:
+            return False
+        token = authorization.split(" ", 1)[1].strip()
+        req = google_requests.Request()
+        claims = google_id_token.verify_oauth2_token(token, req, settings.push_audience)
+        iss = claims.get("iss", "")
+        if not ("accounts.google.com" in iss):
+            return False
+        expected_email = getattr(settings, "push_service_account", None)
+        if expected_email and claims.get("email") != expected_email:
+            return False
+        return True
+    except Exception:
+        return False
+
+
+@app.post("/pubsub/push")
+def pubsub_push(body: Dict[str, Any], authorization: Optional[str] = Header(default=None)) -> Dict[str, str]:
+    try:
+        if not _verify_push(authorization):
+            return {"status": "ack_error", "detail": "unauthorized"}
         message = body.get("message") or {}
         data_b64 = message.get("data")
         attributes = message.get("attributes") or {}
