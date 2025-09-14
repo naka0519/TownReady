@@ -201,6 +201,25 @@ def generate_content(payload: ContentRequest) -> Dict[str, Any]:
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"firestore_create_failed: {e}")
 
+    # Publish a message for workers
+    try:
+        try:
+            from GCP_AI_Agent_hackathon.services import Publisher
+        except Exception:
+            import sys
+            from pathlib import Path
+
+            sys.path.append(str(Path(__file__).resolve().parents[1]))
+            from services import Publisher  # type: ignore
+
+        pub = Publisher()
+        pub.publish_json({"job_id": job_id, "task": "content"}, attributes={"type": "content"})
+    except Exception:
+        # Publishing failure should not 500 the request in MVP
+        pass
+
+    return {"job_id": job_id, "status": "queued"}
+
 @app.get("/health/firestore_write")
 def health_firestore_write() -> Dict[str, Any]:
     """Attempt a minimal write to Firestore to verify permissions."""
@@ -220,22 +239,7 @@ def health_firestore_write() -> Dict[str, Any]:
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
-    try:
-        try:
-            from GCP_AI_Agent_hackathon.services import Publisher
-        except Exception:
-            import sys
-            from pathlib import Path
-
-            sys.path.append(str(Path(__file__).resolve().parents[1]))
-            from services import Publisher  # type: ignore
-
-        pub = Publisher()
-        pub.publish_json({"job_id": job_id, "task": "content"}, attributes={"type": "content"})
-    except Exception:
-        pass
-
-    return {"job_id": job_id, "status": "queued"}
+    
 
 
 @app.get("/api/jobs/{job_id}")
