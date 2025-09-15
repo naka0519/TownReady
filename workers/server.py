@@ -289,6 +289,18 @@ def pubsub_push(body: Dict[str, Any], authorization: Optional[str] = Header(defa
             storage = Storage()
         except Exception:
             storage = None
+        # Load settings and attempt counters
+        try:
+            settings = Settings.load()
+        except Exception:
+            settings = None  # pragma: no cover
+        attempts_map: Dict[str, int] = {}
+        try:
+            if isinstance(job_doc.get("attempts"), dict):
+                attempts_map = dict(job_doc.get("attempts") or {})
+        except Exception:
+            attempts_map = {}
+        cur_attempt = int(attempts_map.get(task, 0))
 
         # Route by task and build outputs
         if task == "plan":
@@ -317,9 +329,20 @@ def pubsub_push(body: Dict[str, Any], authorization: Optional[str] = Header(defa
         if task == "scenario" and isinstance(result, dict) and isinstance(result.get("assets"), dict):
             extra_update["assets"] = result["assets"]
         # Mark this task as completed (append to list)
-        completed_tasks = set((jobs.get(job_id) or {}).get("completed_tasks") or [])
+        current_doc = jobs.get(job_id) or {}
+        completed_tasks = set((current_doc.get("completed_tasks") or []))
         completed_tasks.add(task)
-        extra_update["completed_tasks"] = sorted(list(completed_tasks))
+        completed_sorted = sorted(list(completed_tasks))
+        extra_update["completed_tasks"] = completed_sorted
+        # Maintain completed_order to preserve execution order
+        completed_order = list(current_doc.get("completed_order") or [])
+        if task not in completed_order:
+            completed_order.append(task)
+        extra_update["completed_order"] = completed_order
+        # Reset attempts for this task after success
+        if task in attempts_map:
+            attempts_map.pop(task, None)
+        extra_update["attempts"] = attempts_map
         jobs.update_status(job_id, "done", extra_update)
 
         # Chain next task automatically (best-effort)
@@ -344,7 +367,26 @@ def pubsub_push(body: Dict[str, Any], authorization: Optional[str] = Header(defa
         try:
             job_id = job_id if "job_id" in locals() else None
             if job_id:
-                JobsStore().update_status(job_id, "error", {"error": str(e)})
+                js = JobsStore()
+                # Update attempts counter
+                doc = js.get(job_id) or {}
+                amap: Dict[str, int] = {}
+                if isinstance(doc.get("attempts"), dict):
+                    amap = dict(doc.get("attempts") or {})
+                # task may be undefined if decoding failed
+                tname = (task if "task" in locals() else "unknown")
+                amap[tname] = int(amap.get(tname, 0)) + 1
+                update = {"error": str(e), "attempts": amap}
+                # Basic retry: republish immediately if attempts below threshold
+                try:
+                    max_try = getattr(settings, "retry_max_attempts", 3) if settings else 3
+                    if tname not in {"", "unknown"} and amap[tname] < max_try:
+                        pub = Publisher()
+                        pub.publish_json({"job_id": job_id, "task": tname}, attributes={"type": tname})
+                        update["retry"] = {"task": tname, "attempt": amap[tname]}
+                except Exception:
+                    pass
+                js.update_status(job_id, "error", update)
         except Exception:
             pass
         # Always return 200 to avoid redelivery storms

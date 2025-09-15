@@ -1,0 +1,27 @@
+substitutions:
+  _API_URL: ""
+
+steps:
+  # Contract tests: JSON Schema + Pydantic validation + API smoke (optional)
+  - name: "python:3.11"
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        apt-get update -qq && apt-get install -y -qq jq curl >/dev/null
+        pip install --no-cache-dir -r requirements.txt
+        bash scripts/contract_test.sh
+
+  # E2E smoke: chaining + signed URL HEAD (runs only when _API_URL is provided)
+  - name: "gcr.io/cloud-builders/gcloud"
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        apt-get update -qq && apt-get install -y -qq jq curl >/dev/null
+        if [[ -n "${_API_URL}" ]]; then \
+          export API_URL="${_API_URL}"; \
+          bash scripts/e2e_smoke.sh; \
+        else \
+          echo "[E2E] Skipped: _API_URL not provided"; \
+        fi

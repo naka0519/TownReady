@@ -36,6 +36,7 @@ PY
 
 if [[ -n "${API_URL:-}" ]]; then
   echo "[ContractTest] API smoke (plan)"
+  mkdir -p tmp
   cat > tmp/ct_plan.json <<'JSON'
 {
   "location": { "address": "横浜市瀬谷区＊＊＊", "lat": 35.47, "lng": 139.49 },

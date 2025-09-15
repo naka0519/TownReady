@@ -31,6 +31,8 @@ class Settings:
     push_service_account: Optional[str]
     # Signed URL defaults
     signed_url_ttl: int
+    # Retry policy
+    retry_max_attempts: int
 
     @staticmethod
     def load() -> "Settings":
@@ -50,6 +52,10 @@ class Settings:
             signed_url_ttl = int(os.getenv("SIGNED_URL_TTL", "3600"))
         except Exception:
             signed_url_ttl = 3600
+        try:
+            retry_max_attempts = int(os.getenv("RETRY_MAX_ATTEMPTS", "3"))
+        except Exception:
+            retry_max_attempts = 3
 
         if not project:
             raise RuntimeError("GCP_PROJECT is not set in environment")
@@ -68,4 +74,5 @@ class Settings:
             push_audience=push_audience,
             push_service_account=push_service_account,
             signed_url_ttl=signed_url_ttl,
+            retry_max_attempts=retry_max_attempts,
         )
