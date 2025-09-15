@@ -69,7 +69,7 @@
 - [x] JSON Schema 生成＆Contract Test（`schemas/generate_json_schema.py` 実行／Pydantic 検証）
 - [x] README/.env の整合更新（PUSH/KBS 配列）
 - [x] CI 設定追加（`infra/cloudbuild.tests.yaml`）/手動実行で成功
-- [ ] Cloud Build トリガー作成（main push/PR 時に自動実行）
+- [x] Cloud Build トリガー作成（main push/PR 時に自動実行, TownReady-CI）
 - [x] KB 設定の実環境反映（.env KB\_\* 反映／API 再デプロイ／GCS→DE 取り込み／検索ヒット確認）
 - [ ] 署名 URL 運用改善（TTL env 化/Content-Disposition 付与/失効時の UX）
 - [x] E2E スモークスクリプト追加（`scripts/e2e_smoke.sh`）
@@ -99,6 +99,10 @@
 - ContractTest スクリプト: `bash scripts/contract_test.sh`（Schema 生成/Pydantic 検証/plan スモーク）
 - E2E スモーク: `bash scripts/e2e_smoke.sh`（タスク 4 到達、Scenario/Content 署名 URL の HEAD が 200）
 - 連鎖順/リトライ: `curl -sS "$API_URL/api/jobs/$JOB_ID" | jq '.completed_order, .attempts, .retry'`（順序配列が実行順、エラー未発生なら attempts は `{}`/retry は `null`）
+ - CI トリガー（手動実行/ログ）:
+   - 実行: `gcloud builds triggers run TownReady-CI --project "$GCP_PROJECT" --branch=main --substitutions=_API_URL="$API_URL"`
+   - 一覧: `gcloud builds list --project "$GCP_PROJECT" --format='table(id,status,createTime)'`
+   - ログ（Cloud Logging のみ）: `gcloud beta builds log --project "$GCP_PROJECT" --stream <BUILD_ID>`
 
 ## 6. 受け入れ基準（MVP）
 
@@ -144,8 +148,9 @@
 ```
 [2025-09-15]
 - Done: JSON Schema 生成と Pydantic による Contract Test（サンプルI/O）を実施。KB 検索APIをバージョン差異に対応（serving_config/data_store 両対応）し、デプロイスクリプトで KB_* 環境変数を Cloud Run へ引き渡すよう更新。GCS の `kb/` に .txt 文書を配置、Discovery Engine サービスエージェントへ `roles/storage.objectViewer` を付与し、取り込み・検索ヒットを確認。E2E スモーク/Contract Test スクリプトを追加し、署名URL 200・連鎖完了を確認
-- Issues: Cloud Build トリガー未作成、KB のスニペット表示/文書拡充/再取込運用、連鎖リトライのバックオフ/通知
-- Next: トリガー作成 → E2EスモークをCI常時化 → KB 運用改善（スニペット/文書追加）→ リトライのバックオフ/通知
+- Done(追記): Cloud Build トリガー「TownReady-CI」を作成。main への PR/push で `infra/cloudbuild.tests.yaml` を実行。Cloud Logging のみ出力でビルド成功を確認（`gcloud beta builds log --stream <BUILD_ID>`）
+- Issues: KB のスニペット表示/文書拡充/再取込運用、連鎖リトライのバックオフ/通知
+- Next: E2E スモークの CI 常時化（PR必須）→ KB 運用改善（スニペット/文書追加）→ リトライのバックオフ/通知
 
 ---
 

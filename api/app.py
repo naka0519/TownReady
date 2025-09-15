@@ -285,3 +285,83 @@ def kb_search(q: str, n: int = 3) -> Dict[str, Any]:
         return {"status": "ok", "hits": hits}
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
+
+# --- Minimal job status view (HTML) ---
+@app.get("/view/jobs/{job_id}", response_model=None)
+def view_job(job_id: str) -> Any:  # returns HTML
+    """Minimal job status/asset view for quick manual verification.
+
+    This renders a simple HTML that polls GET /api/jobs/{job_id} and shows
+    status, tasks, and download links (signed URLs if available).
+    """
+    try:
+        from GCP_AI_Agent_hackathon.services import JobsStore
+    except Exception:
+        import sys
+        from pathlib import Path
+        sys.path.append(str(Path(__file__).resolve().parents[1]))
+        from services import JobsStore  # type: ignore
+
+    jobs = JobsStore()
+    doc = jobs.get(job_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="job not found")
+
+    html = f"""
+    <!doctype html>
+    <html lang=\"ja\"><head>
+    <meta charset=\"utf-8\" />
+    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
+    <title>TownReady Job {job_id}</title>
+    <style>
+      body {{ font-family: system-ui, sans-serif; padding: 16px; line-height: 1.5; }}
+      code, pre {{ background:#f5f5f7; padding:2px 4px; border-radius:4px; }}
+      .ok {{ color: #0a7; }} .warn {{ color:#c80; }} .err {{ color:#c33; }}
+      ul {{ padding-left: 20px; }} a {{ word-break: break-all; }}
+    </style>
+    </head><body>
+    <h2>Job <code>{job_id}</code></h2>
+    <div id=\"meta\"></div>
+    <h3>Scenario assets</h3>
+    <ul id=\"assets\"></ul>
+    <h3>Content</h3>
+    <ul id=\"content\"></ul>
+    <h3>Raw</h3>
+    <pre id=\"raw\" style=\"white-space:pre-wrap\"></pre>
+    <script>
+      const jobId = {job_id!r};
+      async function fetchJob() {{
+        const res = await fetch(`/api/jobs/${{jobId}}`);
+        if (!res.ok) return;
+        const j = await res.json();
+        document.getElementById('meta').innerHTML = `
+          <div>Status: <b>${{j.status}}</b> / Task: <code>${{j.task || ''}}</code></div>
+          <div>Completed: <code>${{(j.completed_order||j.completed_tasks||[]).join(', ')}}</code></div>
+          <div>Updated: <code>${{j.updated_at}}</code></div>
+        `;
+        const A = [];
+        const as = (j.assets||{{}});
+        if (as.script_md_url) A.push(`<li><a href="${{as.script_md_url}}" target="_blank">script.md</a></li>`);
+        if (as.roles_csv_url) A.push(`<li><a href="${{as.roles_csv_url}}" target="_blank">roles.csv</a></li>`);
+        if (as.routes_json_url) A.push(`<li><a href="${{as.routes_json_url}}" target="_blank">routes.json</a></li>`);
+        document.getElementById('assets').innerHTML = A.join('') || '<li>（なし）</li>';
+
+        const C = [];
+        const content = (j.results && j.results.content) || (j.result && j.result.type==='content' && j.result) || {{}};
+        if (content.poster_prompts_url) C.push(`<li><a href="${{content.poster_prompts_url}}" target="_blank">poster_prompts.txt</a></li>`);
+        if (content.video_prompt_url) C.push(`<li><a href="${{content.video_prompt_url}}" target="_blank">video_prompt.txt</a></li>`);
+        if (content.video_shotlist_url) C.push(`<li><a href="${{content.video_shotlist_url}}" target="_blank">video_shotlist.json</a></li>`);
+        document.getElementById('content').innerHTML = C.join('') || '<li>（なし）</li>';
+
+        document.getElementById('raw').textContent = JSON.stringify(j, null, 2);
+      }}
+      fetchJob();
+      setInterval(fetchJob, 2000);
+    </script>
+    </body></html>
+    """
+    from fastapi.responses import HTMLResponse
+    # Remove any leading whitespace/newline so the first byte is '<'
+    html = html.lstrip()
+    return HTMLResponse(html)
