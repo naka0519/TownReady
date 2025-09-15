@@ -143,10 +143,18 @@ def _build_scenario(job_id: str, job_payload: Dict[str, Any], storage: Optional[
         )
         # Best-effort: also provide short-lived signed URLs for distribution
         try:
-            # Do not force content_type for GET to maximize compatibility
-            assets["script_md_url"] = storage.signed_url(script_path, ttl_seconds=3600)
-            assets["roles_csv_url"] = storage.signed_url(roles_path, ttl_seconds=3600)
-            assets["routes_json_url"] = storage.signed_url(routes_path, ttl_seconds=3600)
+            from GCP_AI_Agent_hackathon.services import Settings as _Settings
+        except Exception:
+            import sys as _sys
+            from pathlib import Path as _Path
+            _sys.path.append(str(_Path(__file__).resolve().parents[1]))
+            from services import Settings as _Settings  # type: ignore
+        settings = _Settings.load()
+        try:
+            # Do not force content_type for GET to maximize compatibility; set download filename
+            assets["script_md_url"] = storage.signed_url(script_path, ttl_seconds=settings.signed_url_ttl, download_name="script.md")
+            assets["roles_csv_url"] = storage.signed_url(roles_path, ttl_seconds=settings.signed_url_ttl, download_name="roles.csv")
+            assets["routes_json_url"] = storage.signed_url(routes_path, ttl_seconds=settings.signed_url_ttl, download_name="routes.json")
         except Exception as e:
             logger.exception("signed_url_failed_scenario: path=%s error=%s", script_path, e)
     return {"type": "scenario", "assets": assets}
@@ -216,6 +224,15 @@ def _build_content(job_payload: Dict[str, Any], scenario_assets: Dict[str, Any],
     ]
     uris: Dict[str, str] = {}
     if storage:
+        # Load settings for signed URL TTL and filename hints
+        try:
+            from GCP_AI_Agent_hackathon.services import Settings as _Settings  # type: ignore
+        except Exception:
+            import sys as _sys
+            from pathlib import Path as _Path
+            _sys.path.append(str(_Path(__file__).resolve().parents[1]))
+            from services import Settings as _Settings  # type: ignore
+        settings = _Settings.load()
         poster_path = f"jobs/{job_id}/poster_prompts.txt"
         video_prompt_path = f"jobs/{job_id}/video_prompt.txt"
         shotlist_path = f"jobs/{job_id}/video_shotlist.json"
@@ -230,9 +247,9 @@ def _build_content(job_payload: Dict[str, Any], scenario_assets: Dict[str, Any],
         )
         # Best-effort: signed URLs
         try:
-            uris["poster_prompts_url"] = storage.signed_url(poster_path, ttl_seconds=3600)
-            uris["video_prompt_url"] = storage.signed_url(video_prompt_path, ttl_seconds=3600)
-            uris["video_shotlist_url"] = storage.signed_url(shotlist_path, ttl_seconds=3600)
+            uris["poster_prompts_url"] = storage.signed_url(poster_path, ttl_seconds=settings.signed_url_ttl, download_name="poster_prompts.txt")
+            uris["video_prompt_url"] = storage.signed_url(video_prompt_path, ttl_seconds=settings.signed_url_ttl, download_name="video_prompt.txt")
+            uris["video_shotlist_url"] = storage.signed_url(shotlist_path, ttl_seconds=settings.signed_url_ttl, download_name="video_shotlist.json")
         except Exception as e:
             logger.exception("signed_url_failed_content: error=%s", e)
     return {"type": "content", "poster_prompts": poster_prompts, "video_prompt": video_prompt, "video_shotlist": shotlist, **uris}
@@ -287,8 +304,16 @@ def pubsub_push(body: Dict[str, Any], authorization: Optional[str] = Header(defa
         else:
             result = {"type": task, "message": "Unknown task; acknowledged"}
 
-        # Persist result; also persist top-level assets after 'scenario'
-        extra_update: Dict[str, Any] = {"result": result}
+        # Persist result; also persist per-task results history and top-level assets after 'scenario'
+        # Merge into results map
+        prev_results: Dict[str, Any] = {}
+        try:
+            if isinstance(job_doc.get("results"), dict):
+                prev_results = dict(job_doc.get("results") or {})
+        except Exception:
+            prev_results = {}
+        prev_results[task] = result
+        extra_update: Dict[str, Any] = {"result": result, "results": prev_results}
         if task == "scenario" and isinstance(result, dict) and isinstance(result.get("assets"), dict):
             extra_update["assets"] = result["assets"]
         # Mark this task as completed (append to list)

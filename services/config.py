@@ -29,6 +29,8 @@ class Settings:
     push_verify: bool
     push_audience: Optional[str]
     push_service_account: Optional[str]
+    # Signed URL defaults
+    signed_url_ttl: int
 
     @staticmethod
     def load() -> "Settings":
@@ -44,6 +46,10 @@ class Settings:
         push_verify = str(os.getenv("PUSH_VERIFY", "false")).lower() in {"1", "true", "yes", "on"}
         push_audience = os.getenv("PUSH_AUDIENCE")
         push_service_account = os.getenv("PUSH_SERVICE_ACCOUNT")
+        try:
+            signed_url_ttl = int(os.getenv("SIGNED_URL_TTL", "3600"))
+        except Exception:
+            signed_url_ttl = 3600
 
         if not project:
             raise RuntimeError("GCP_PROJECT is not set in environment")
@@ -61,4 +67,5 @@ class Settings:
             push_verify=push_verify,
             push_audience=push_audience,
             push_service_account=push_service_account,
+            signed_url_ttl=signed_url_ttl,
         )

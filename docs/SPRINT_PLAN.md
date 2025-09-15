@@ -17,11 +17,12 @@
 - README/.env: `PUBSUB_TOPIC`/`PUSH_*`/`KB_SEARCH_*` を追記
 
 ## 2. 直近の課題・差分（Gap）
-- Contract Test 未整備（JSON Schema でI/O拘束 + CI）
+- Contract Test のCI組み込み（生成・検証は実施済）
 - フロント未実装（フォーム→投入→進捗→成果DL→KPI）
 - KPI 集計（Webhook格納・可視化）未実装
 - 署名URLの運用調整（TTL設定/ファイル名付与/失効ハンドリング）
 - 連鎖のエラー/リトライ/アラート設計の明確化
+- KB 運用改善（文書拡充・スニペット表示・自動再取込）
 
 ## 3. フェーズ別スプリント計画（MVP→α）
 
@@ -43,12 +44,12 @@
 - 改善提案（前回ログ/KPIからの改善点サジェスト）
 
 ## 4. Next Actions（直近の実装順）
-1) Contract Test: JSON Schema 生成＋API I/O検証（CIに追加）
-2) E2E最小: 入力→連鎖→成果（署名URL）までのスモーク手順を docs に整備
-3) 署名URL運用改善: TTLを env 化（例: `SIGNED_URL_TTL`）/ Content-Disposition 付与（ダウンロード名）
-4) 連鎖のエラー/リトライ設計: 失敗時の停止・再投入・通知ポリシー確立
-5) Web最小: 進捗/成果DLビュー（署名URL直リンク/QR）
-6) Gemini着手: Coordinator/Scenario の本文生成（制約出力/多言語）
+1) Contract Test をCIへ組み込み（JSON Schema 生成＋Pydantic 検証を自動化）
+2) E2E最小: 入力→連鎖→成果（署名URL）までのスモークを docs/スクリプト化
+3) 連鎖のエラー/リトライ設計: 失敗時の停止・再投入・通知ポリシー確立
+4) Web最小: 進捗/成果DLビュー（署名URL直リンク/QR）
+5) Gemini着手: Coordinator/Scenario の本文生成（制約出力/多言語）
+6) KB 運用改善: 文書拡充（kb/ 配下）、スニペット設定、定期再取込の運用化
 
 ## 5. タスク分解（チェックリスト）
 
@@ -57,8 +58,10 @@
 - [x] Worker で次タスク発行（`workers/server.py`）
 - [x] `services/storage_client.py` に署名URL取得を追加（配布TTL/権限）
 - [x] Safety×KB 最小連携（`services/kb_search.py` を Worker から呼び出し）
-- [ ] JSON Schema 生成＆Contract Test（`schemas/generate_json_schema.py`）
-- [x] README/.env の整合更新（PUSH/KBS 配列）
+- [x] JSON Schema 生成＆Contract Test（`schemas/generate_json_schema.py` 実行／Pydantic 検証）
+ - [x] README/.env の整合更新（PUSH/KBS 配列）
+ - [ ] Contract Test のCI組み込み
+ - [x] KB 設定の実環境反映（.env KB_* 反映／API 再デプロイ／GCS→DE 取り込み／検索ヒット確認）
  - [ ] 署名URL運用改善（TTL env 化/Content-Disposition 付与/失効時のUX）
 
 ### Phase 2
@@ -77,6 +80,7 @@
 - 連鎖完了: `completed_tasks` が `["plan","scenario","safety","content"]`
 - KB連携: safety の `issues[].kb_hits` が 0–2 件
 - ログ監視: Worker の `signed_url_failed_*` が出ないこと（gcloud logging read フィルタ使用）
+ - KB検索API: `curl -sS --get "$API_URL/api/kb/search" --data-urlencode "q=横浜 避難" --data-urlencode "n=2" | jq .`（.env の KB_* 反映・API 再デプロイ済み、データストアに `kb/` 配下の .txt/.html/.pdf 等が取り込まれていること）
 
 ## 6. 受け入れ基準（MVP）
 - 入力→生成→配布まで10分以内（Imagen/Veoは段階導入可）
@@ -118,9 +122,19 @@
 - Next: Contract Test 着手 → E2Eスモーク手順の docs 追加 → 署名URL運用改善（TTL env, DL名）→ Web最小ビュー
 ```
 
+```
+[2025-09-15]
+- Done: JSON Schema 生成と Pydantic による Contract Test（サンプルI/O）を実施。KB 検索APIをバージョン差異に対応（serving_config/data_store 両対応）し、デプロイスクリプトで KB_* 環境変数を Cloud Run へ引き渡すよう更新。GCS の `kb/` に .txt 文書を配置、Discovery Engine サービスエージェントへ `roles/storage.objectViewer` を付与し、取り込み・検索ヒットを確認
+- Issues: Contract Test のCI組み込み、KB のスニペット表示/文書拡充/再取込運用
+- Next: CI 組み込み → E2Eスモーク → KB 運用改善（スニペット/文書追加）
+
 ---
 
 更新ルール:
 - タスクはチェックボックスで進捗管理し、PR/コミットで更新
 - 大きな設計変更は本ドキュメントのフェーズ/受け入れ基準にも反映
 - 実装後は疎通手順・確認コマンドを追記し再現性を担保
+[2025-09-15]
+- Done: JSON Schema 生成と Pydantic による Contract Test（サンプルI/O）を実施。KB 検索APIをバージョン差異に対応（serving_config/data_store 両対応）し、デプロイスクリプトで KB_* 環境変数を Cloud Run へ引き渡すよう更新
+- Issues: 実環境の KB_* 変数未反映・データストア未取り込みの可能性。CI 組み込みは未了
+- Next: `.env` に KB_* を追記→API再デプロイ→KB検索疎通確認／Contract Test のCI組み込み／E2Eスモーク整備

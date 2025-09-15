@@ -37,7 +37,14 @@ class Storage:
         blob.upload_from_string(data, content_type=content_type)
         return f"gs://{self.bucket.name}/{path}"
 
-    def signed_url(self, path: str, ttl_seconds: int = 3600, method: str = "GET", content_type: Optional[str] = None) -> str:
+    def signed_url(
+        self,
+        path: str,
+        ttl_seconds: Optional[int] = None,
+        method: str = "GET",
+        content_type: Optional[str] = None,
+        download_name: Optional[str] = None,
+    ) -> str:
         """Generate a V4 signed URL for the given object path.
 
         Parameters:
@@ -49,7 +56,8 @@ class Storage:
             A time-limited HTTPS URL
         """
         blob = self.bucket.blob(path)
-        expiration = timedelta(seconds=ttl_seconds)
+        eff_ttl = int(ttl_seconds) if ttl_seconds and ttl_seconds > 0 else int(self.settings.signed_url_ttl)
+        expiration = timedelta(seconds=eff_ttl)
 
         # Resolve credentials with required scopes for IAM SignBlob
         REQUIRED_SCOPES = (
@@ -100,6 +108,8 @@ class Storage:
         params = {"version": "v4", "expiration": expiration, "method": method}
         if content_type:
             params["content_type"] = content_type
+        if download_name:
+            params["response_disposition"] = f"attachment; filename={download_name}"
 
         if sa_email and access_token:
             params["service_account_email"] = sa_email

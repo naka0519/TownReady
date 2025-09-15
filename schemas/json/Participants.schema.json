@@ -1,0 +1,41 @@
+{
+  "description": "Participant composition and accessibility needs.",
+  "properties": {
+    "total": {
+      "minimum": 0,
+      "title": "Total",
+      "type": "integer"
+    },
+    "children": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Children",
+      "type": "integer"
+    },
+    "elderly": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Elderly",
+      "type": "integer"
+    },
+    "wheelchair": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Wheelchair",
+      "type": "integer"
+    },
+    "languages": {
+      "description": "e.g., ['ja','en']",
+      "items": {
+        "type": "string"
+      },
+      "title": "Languages",
+      "type": "array"
+    }
+  },
+  "required": [
+    "total"
+  ],
+  "title": "Participants",
+  "type": "object"
+}

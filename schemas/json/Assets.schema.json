@@ -1,0 +1,161 @@
+{
+  "$defs": {
+    "Route": {
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "points": {
+          "items": {
+            "$ref": "#/$defs/RoutePoint"
+          },
+          "title": "Points",
+          "type": "array"
+        },
+        "accessibility_notes": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Accessibility Notes"
+        }
+      },
+      "required": [
+        "name",
+        "points"
+      ],
+      "title": "Route",
+      "type": "object"
+    },
+    "RoutePoint": {
+      "properties": {
+        "lat": {
+          "maximum": 90.0,
+          "minimum": -90.0,
+          "title": "Lat",
+          "type": "number"
+        },
+        "lng": {
+          "maximum": 180.0,
+          "minimum": -180.0,
+          "title": "Lng",
+          "type": "number"
+        },
+        "label": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Label"
+        }
+      },
+      "required": [
+        "lat",
+        "lng"
+      ],
+      "title": "RoutePoint",
+      "type": "object"
+    },
+    "VideoShot": {
+      "properties": {
+        "description": {
+          "description": "Shot description or prompt",
+          "title": "Description",
+          "type": "string"
+        },
+        "duration_sec": {
+          "maximum": 60,
+          "minimum": 1,
+          "title": "Duration Sec",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "description",
+        "duration_sec"
+      ],
+      "title": "VideoShot",
+      "type": "object"
+    }
+  },
+  "description": "Generated assets container (script/roles/routes/media prompts).",
+  "properties": {
+    "script_md": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Script Md"
+    },
+    "roles_csv": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Roles Csv"
+    },
+    "routes": {
+      "items": {
+        "$ref": "#/$defs/Route"
+      },
+      "title": "Routes",
+      "type": "array"
+    },
+    "poster_prompts": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Poster Prompts",
+      "type": "array"
+    },
+    "video_prompt": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Video Prompt"
+    },
+    "video_shotlist": {
+      "items": {
+        "$ref": "#/$defs/VideoShot"
+      },
+      "title": "Video Shotlist",
+      "type": "array"
+    },
+    "languages": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Languages",
+      "type": "array"
+    }
+  },
+  "title": "Assets",
+  "type": "object"
+}

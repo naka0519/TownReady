@@ -1,0 +1,218 @@
+{
+  "$defs": {
+    "Constraints": {
+      "description": "Operational constraints for the drill.",
+      "properties": {
+        "max_duration_min": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Duration Min"
+        },
+        "limited_outdoor": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Limited Outdoor"
+        }
+      },
+      "title": "Constraints",
+      "type": "object"
+    },
+    "HazardSpec": {
+      "description": "Target hazards and drill context.",
+      "properties": {
+        "types": {
+          "items": {
+            "$ref": "#/$defs/HazardType"
+          },
+          "title": "Types",
+          "type": "array"
+        },
+        "drill_date": {
+          "format": "date",
+          "title": "Drill Date",
+          "type": "string"
+        },
+        "indoor": {
+          "title": "Indoor",
+          "type": "boolean"
+        },
+        "nighttime": {
+          "title": "Nighttime",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "types",
+        "drill_date",
+        "indoor",
+        "nighttime"
+      ],
+      "title": "HazardSpec",
+      "type": "object"
+    },
+    "HazardType": {
+      "enum": [
+        "earthquake",
+        "fire",
+        "flood",
+        "tsunami",
+        "landslide"
+      ],
+      "title": "HazardType",
+      "type": "string"
+    },
+    "Location": {
+      "description": "Physical location metadata for a drill site.",
+      "properties": {
+        "address": {
+          "description": "Human-readable address",
+          "title": "Address",
+          "type": "string"
+        },
+        "lat": {
+          "description": "Latitude",
+          "maximum": 90.0,
+          "minimum": -90.0,
+          "title": "Lat",
+          "type": "number"
+        },
+        "lng": {
+          "description": "Longitude",
+          "maximum": 180.0,
+          "minimum": -180.0,
+          "title": "Lng",
+          "type": "number"
+        },
+        "site_map_url": {
+          "anyOf": [
+            {
+              "format": "uri",
+              "maxLength": 2083,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional URL to the site map",
+          "title": "Site Map Url"
+        },
+        "geojson": {
+          "anyOf": [
+            {
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional GeoJSON object",
+          "title": "Geojson"
+        }
+      },
+      "required": [
+        "address",
+        "lat",
+        "lng"
+      ],
+      "title": "Location",
+      "type": "object"
+    },
+    "Participants": {
+      "description": "Participant composition and accessibility needs.",
+      "properties": {
+        "total": {
+          "minimum": 0,
+          "title": "Total",
+          "type": "integer"
+        },
+        "children": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Children",
+          "type": "integer"
+        },
+        "elderly": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Elderly",
+          "type": "integer"
+        },
+        "wheelchair": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Wheelchair",
+          "type": "integer"
+        },
+        "languages": {
+          "description": "e.g., ['ja','en']",
+          "items": {
+            "type": "string"
+          },
+          "title": "Languages",
+          "type": "array"
+        }
+      },
+      "required": [
+        "total"
+      ],
+      "title": "Participants",
+      "type": "object"
+    }
+  },
+  "description": "Common input payload used by generate/plan and generate/scenario.",
+  "properties": {
+    "location": {
+      "$ref": "#/$defs/Location"
+    },
+    "participants": {
+      "$ref": "#/$defs/Participants"
+    },
+    "hazard": {
+      "$ref": "#/$defs/HazardSpec"
+    },
+    "constraints": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Constraints"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "kb_refs": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Kb Refs",
+      "type": "array"
+    }
+  },
+  "required": [
+    "location",
+    "participants",
+    "hazard"
+  ],
+  "title": "GenerateBaseRequest",
+  "type": "object"
+}

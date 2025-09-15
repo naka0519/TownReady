@@ -1,0 +1,46 @@
+{
+  "$defs": {
+    "HazardType": {
+      "enum": [
+        "earthquake",
+        "fire",
+        "flood",
+        "tsunami",
+        "landslide"
+      ],
+      "title": "HazardType",
+      "type": "string"
+    }
+  },
+  "description": "Target hazards and drill context.",
+  "properties": {
+    "types": {
+      "items": {
+        "$ref": "#/$defs/HazardType"
+      },
+      "title": "Types",
+      "type": "array"
+    },
+    "drill_date": {
+      "format": "date",
+      "title": "Drill Date",
+      "type": "string"
+    },
+    "indoor": {
+      "title": "Indoor",
+      "type": "boolean"
+    },
+    "nighttime": {
+      "title": "Nighttime",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "types",
+    "drill_date",
+    "indoor",
+    "nighttime"
+  ],
+  "title": "HazardSpec",
+  "type": "object"
+}

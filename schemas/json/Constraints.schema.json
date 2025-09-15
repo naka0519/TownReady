@@ -1,0 +1,32 @@
+{
+  "description": "Operational constraints for the drill.",
+  "properties": {
+    "max_duration_min": {
+      "anyOf": [
+        {
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Max Duration Min"
+    },
+    "limited_outdoor": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Limited Outdoor"
+    }
+  },
+  "title": "Constraints",
+  "type": "object"
+}
