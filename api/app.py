@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 import time
+import os
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 try:
     # Load .env located at project root for local development
     from dotenv import load_dotenv
@@ -31,6 +33,17 @@ except Exception:  # pragma: no cover - local dev fallback from api/ directory
 
 
 app = FastAPI(title="TownReady API", version="0.1.0")
+
+# CORS (for Web frontend). Allow comma-separated origins via CORS_ALLOW_ORIGINS or '*'.
+_origins = os.getenv("CORS_ALLOW_ORIGINS", "*")
+allow_origins = [o.strip() for o in _origins.split(",") if o.strip()] or ["*"]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allow_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 class SafetyReviewRequest(BaseModel):

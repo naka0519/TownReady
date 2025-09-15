@@ -15,16 +15,17 @@
 - ジョブフロー: queued → processing → done（Firestore 更新）
 - Worker: タスク連鎖（plan→scenario→safety→content）・タスク単位の冪等化・任意の OIDC 検証（`_verify_push`）
 - Scenario/Content: GCS 書き込み＋署名 URL（IAM SignBlob, TTL=3600s）を安定発行（`services/storage_client.py`）
-- Safety×KB: 最小連携（issues に `kb_hits` 付与）
-- README/.env: `PUBSUB_TOPIC`/`PUSH_*`/`KB_SEARCH_*` を追記
+- 署名URL再発行: 失効時の再発行エンドポイント＋最小UI（`POST /api/jobs/{job_id}/assets/refresh`, `/view/jobs/{job_id}`）
+- 最小UI: `/view/start` からのジョブ起動、ジョブ画面でのリンク/Safety表示/再発行ボタン
+- Worker リトライ: 指数バックオフ＋ジッタ、遅延処理（`attributes.delay_ms`）とエラーログ（`task_failed`）
+- Push 同期: Pub/Sub pushEndpoint/audience/SA と Worker PUSH_* を `infra/sync_worker_push.sh` で同期
 
 ## 2. 直近の課題・差分（Gap）
 
 - Contract Test の CI 組み込み（生成・検証は実施済）
 - フロント未実装（フォーム → 投入 → 進捗 → 成果 DL→KPI）
 - KPI 集計（Webhook 格納・可視化）未実装
-- 署名 URL の運用調整（TTL 設定/ファイル名付与/失効ハンドリング）
-- 連鎖のエラー/リトライ/アラート設計の明確化
+- アラート運用: リトライは実装済。Log-based Alert / Error Reporting の通知設計
 - KB 運用改善（文書拡充・スニペット表示・自動再取込）
 
 ## 3. フェーズ別スプリント計画（MVP→α）
@@ -51,12 +52,11 @@
 
 ## 4. Next Actions（直近の実装順）
 
-1. CI トリガー作成: Cloud Build で `infra/cloudbuild.tests.yaml` を main への push/PR で自動実行
-2. リトライ/アラート強化: 最小実装にバックオフ・通知（Error Reporting/Log-based Alert）を追加
-3. Web 最小: 入力フォーム → ジョブ起動 → 進捗 →DL（署名 URL/QR）
-4. Gemini 着手: Coordinator/Scenario の本文生成（制約出力/多言語）
-5. Imagen/Veo 本番 API: ポーリング/保存/URI 格納（段階導入）
-6. KB 運用改善: 文書拡充（kb/ 配下）、スニペット反映の確認、定期再取込の運用化
+1. アラート追加: Log-based Alert（`task_failed`）/ Error Reporting の最小通知
+2. Web 最小（Next.js）: 入力→ジョブ→進捗→DL（署名URL/QR）。既存 `/view/*` の要件を移植
+3. Gemini 着手: Coordinator/Scenario の生成（プロンプト/出力拘束, フラグで段階導入）
+4. Imagen/Veo 本番 API: ポーリング/保存/URI 格納（段階導入）
+5. KB 運用改善: 文書拡充とスニペット精度検証、定期再取込
 
 ## 5. タスク分解（チェックリスト）
 
@@ -71,7 +71,8 @@
 - [x] CI 設定追加（`infra/cloudbuild.tests.yaml`）/手動実行で成功
 - [x] Cloud Build トリガー作成（main push/PR 時に自動実行, TownReady-CI）
 - [x] KB 設定の実環境反映（.env KB\_\* 反映／API 再デプロイ／GCS→DE 取り込み／検索ヒット確認）
-- [ ] 署名 URL 運用改善（TTL env 化/Content-Disposition 付与/失効時の UX）
+- [x] 署名 URL 運用改善（TTL env 化/Content-Disposition 付与/失効時の UX: 再発行API+UI）
+- [x] Worker リトライ/バックオフ（指数＋ジッタ, `delay_ms` 適用, エラーログ追加）
 - [x] E2E スモークスクリプト追加（`scripts/e2e_smoke.sh`）
 - [x] KB 検索のスニペット対応（対応ライブラリで有効化）
 - [x] 連鎖の最小リトライ実装（`attempts` 記録/閾値以下で再投入, `completed_order` 追加）
@@ -99,6 +100,11 @@
 - ContractTest スクリプト: `bash scripts/contract_test.sh`（Schema 生成/Pydantic 検証/plan スモーク）
 - E2E スモーク: `bash scripts/e2e_smoke.sh`（タスク 4 到達、Scenario/Content 署名 URL の HEAD が 200）
 - 連鎖順/リトライ: `curl -sS "$API_URL/api/jobs/$JOB_ID" | jq '.completed_order, .attempts, .retry'`（順序配列が実行順、エラー未発生なら attempts は `{}`/retry は `null`）
+ - 署名URL再発行: `curl -sS -X POST "$API_URL/api/jobs/$JOB_ID/assets/refresh" | jq '.status,.assets_refresh_count'` → `ok`/カウント増加
+ - UI最小: `curl -sS "$API_URL/view/start" | head -n5` / `curl -sS "$API_URL/view/jobs/$JOB_ID" | grep -o 'btnRefresh'`
+ - Push OIDC 同期: `./infra/sync_worker_push.sh --project "$GCP_PROJECT" --region "$REGION" --service townready-worker --subscription townready-jobs-push --sa "townready-api@${GCP_PROJECT}.iam.gserviceaccount.com" --verify true --set-basics-env --dotenv ./.env`
+ - 遅延処理: Pub/Sub publish 時 `--attribute type=content,delay_ms=5000` を付与し、処理遅延を確認
+ - 失敗→バックオフ: Worker の `GCS_BUCKET` を一時不正化→新規ジョブで `content` 実行→`attempts`/`retry.delay_ms` 記録と `task_failed` ログを確認
  - CI トリガー（手動実行/ログ）:
    - 実行: `gcloud builds triggers run TownReady-CI --project "$GCP_PROJECT" --branch=main --substitutions=_API_URL="$API_URL"`
    - 一覧: `gcloud builds list --project "$GCP_PROJECT" --format='table(id,status,createTime)'`
@@ -151,6 +157,12 @@
 - Done(追記): Cloud Build トリガー「TownReady-CI」を作成。main への PR/push で `infra/cloudbuild.tests.yaml` を実行。Cloud Logging のみ出力でビルド成功を確認（`gcloud beta builds log --stream <BUILD_ID>`）
 - Issues: KB のスニペット表示/文書拡充/再取込運用、連鎖リトライのバックオフ/通知
 - Next: E2E スモークの CI 常時化（PR必須）→ KB 運用改善（スニペット/文書追加）→ リトライのバックオフ/通知
+
+```
+[2025-09-15 追加]
+- Done: 署名URL再発行APIと最小UI（`/view/jobs/{job_id}` の再発行ボタン, `/view/start`）を実装・検証。Worker に指数バックオフ＋ジッタ/`delay_ms`遅延処理/`task_failed` エラーログを実装。`infra/sync_worker_push.sh` で pushEndpoint/audience/SA と Worker PUSH_* を同期し、Cloud Run 上で E2E（署名URL 200/再発行OK/遅延OK/連鎖OK）を確認
+- Issues: 通知運用（Log-based Alert/ Error Reporting）未設定、Web最小（Next.js）未実装
+- Next: Log-based Alert設定 → Web最小（Next.js） → Gemini/Imagen/Veo の段階導入
 
 ---
 
