@@ -25,3 +25,6 @@ steps:
         else \
           echo "[E2E] Skipped: _API_URL not provided"; \
         fi
+
+options:
+  logging: CLOUD_LOGGING_ONLY
