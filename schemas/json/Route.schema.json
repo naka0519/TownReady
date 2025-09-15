@@ -1,0 +1,69 @@
+{
+  "$defs": {
+    "RoutePoint": {
+      "properties": {
+        "lat": {
+          "maximum": 90.0,
+          "minimum": -90.0,
+          "title": "Lat",
+          "type": "number"
+        },
+        "lng": {
+          "maximum": 180.0,
+          "minimum": -180.0,
+          "title": "Lng",
+          "type": "number"
+        },
+        "label": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Label"
+        }
+      },
+      "required": [
+        "lat",
+        "lng"
+      ],
+      "title": "RoutePoint",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "name": {
+      "title": "Name",
+      "type": "string"
+    },
+    "points": {
+      "items": {
+        "$ref": "#/$defs/RoutePoint"
+      },
+      "title": "Points",
+      "type": "array"
+    },
+    "accessibility_notes": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Accessibility Notes"
+    }
+  },
+  "required": [
+    "name",
+    "points"
+  ],
+  "title": "Route",
+  "type": "object"
+}

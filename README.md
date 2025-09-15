@@ -177,6 +177,15 @@ IMAGEN_MODEL=imagen-3.0
 VEO_MODEL=veo-2.0
 GEMINI_MODEL=gemini-2.0-pro
 KB_DATASET=kb_default
+PUBSUB_TOPIC=townready-jobs
+# Vertex AI Search (KB) settings
+KB_SEARCH_LOCATION=global
+KB_SEARCH_COLLECTION=default_collection
+KB_SEARCH_DATASTORE=${KB_DATASET}
+# Optional (Push OIDC 検証):
+# PUSH_VERIFY=true
+# PUSH_AUDIENCE=https://<WORKER_URL>/pubsub/push
+# PUSH_SERVICE_ACCOUNT=townready-api@your-project.iam.gserviceaccount.com
 ```
 
 ### ローカル起動（例）
@@ -206,6 +215,30 @@ gcloud run deploy townready-web \
 
 ---
 
+### デプロイ（スクリプト利用, 推奨）
+
+```bash
+# Worker（Artifact Registry build + Cloud Run deploy）
+./infra/deploy_worker.sh \
+  --project "$GCP_PROJECT" --region "$REGION" \
+  --sa "townready-api@${GCP_PROJECT}.iam.gserviceaccount.com"
+
+# API（Artifact Registry build + Cloud Run deploy）
+./infra/deploy_api.sh \
+  --project "$GCP_PROJECT" --region "$REGION" \
+  --sa "townready-api@${GCP_PROJECT}.iam.gserviceaccount.com"
+
+# Pub/Sub Push と Worker OIDC の URL 同期（status.url に揃える）
+./infra/sync_worker_push.sh \
+  --project "$GCP_PROJECT" --region "$REGION" \
+  --service townready-worker \
+  --subscription townready-jobs-push \
+  --sa "townready-api@${GCP_PROJECT}.iam.gserviceaccount.com" \
+  --verify true --set-basics-env --dotenv ./.env
+```
+
+同期スクリプトは Cloud Run の `status.url` を唯一の正として、Pub/Sub の `pushEndpoint`/`audience` と Worker の `PUSH_*` を同一 URL にそろえます。
+
 ### 動作確認（MVP・ジョブフロー）
 
 ```bash
@@ -232,6 +265,29 @@ curl -i https://<YOUR_WORKER_SERVICE>/health   # 200 で OK
 ```
 
 Push 配信（Pub/Sub → Worker）は Cloud Run URL の `/pubsub/push`（POST）へ設定します。
+
+※ ヘルスチェックは `/health` を利用してください（`/healthz` は環境により 404 になる場合があります）。
+
+### いま実装されているジョブ処理
+
+- plan: 入力からシナリオ候補・KPI プラン・受け入れ条件を生成（Firestore へ結果保存）
+- scenario: 台本(Markdown)/役割(CSV)/ルート(JSON)を生成し GCS に保存（URI を `result.assets.*_uri` として返却）
+- safety: ルールベースの安全指摘（要配慮者/屋外制限/初期消火 等）を返却
+- content: ポスター/動画用プロンプトとショットリストを生成し GCS に保存
+- すべて Pub/Sub 経由で Worker が処理。冪等性あり（`done`/`error` は再処理しない）
+- Push OIDC 検証（任意）: `PUSH_VERIFY=true` で有効化。audience/URL/SA が一致しないと未処理（200 応答で ACK されるため注意）
+
+### IAM（最低限）
+
+- API 実行 SA: `roles/datastore.user`, `roles/pubsub.publisher`
+- Worker 実行 SA: `roles/datastore.user`, （GCS 出力時）`roles/storage.objectAdmin` を対象バケットに付与
+
+### トラブルシューティング
+
+- ジョブが `queued` のまま: Pub/Sub の `pushEndpoint`/`audience` と Worker の `PUSH_AUDIENCE` を同一 URL に。`./infra/sync_worker_push.sh` を実行
+- 手動 `curl $WORKER_URL/pubsub/push` が `ack_error: unauthorized`: `PUSH_VERIFY=true` では正常。切り分けで一時 `PUSH_VERIFY=false` に
+- Firestore 書込エラー: API の環境変数（`GCP_PROJECT`/`FIRESTORE_DB`）と SA 権限を確認
+- GCS にファイルが出ない: 保存対象は scenario/content。Worker の `GCS_BUCKET` と権限を確認
 
 ## セキュリティ & プライバシー
 

@@ -54,10 +54,10 @@ add_env REGION
 add_env FIRESTORE_DB
 add_env GCS_BUCKET
 add_env PUBSUB_TOPIC
-# add_env KB_DATASET
-# add_env KB_SEARCH_LOCATION
-# add_env KB_SEARCH_COLLECTION
-# add_env KB_SEARCH_DATASTORE
+add_env KB_DATASET
+add_env KB_SEARCH_LOCATION
+add_env KB_SEARCH_COLLECTION
+add_env KB_SEARCH_DATASTORE
 
 SET_ENV_FLAG=()
 if (( ${#ENV_SET[@]} > 0 )); then

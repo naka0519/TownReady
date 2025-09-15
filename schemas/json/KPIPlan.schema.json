@@ -1,0 +1,50 @@
+{
+  "$defs": {
+    "Targets": {
+      "properties": {
+        "attendance_rate": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Attendance Rate",
+          "type": "number"
+        },
+        "avg_evac_time_sec": {
+          "minimum": 0,
+          "title": "Avg Evac Time Sec",
+          "type": "integer"
+        },
+        "quiz_score": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Quiz Score",
+          "type": "number"
+        }
+      },
+      "required": [
+        "attendance_rate",
+        "avg_evac_time_sec",
+        "quiz_score"
+      ],
+      "title": "Targets",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "targets": {
+      "$ref": "#/$defs/Targets"
+    },
+    "collection": {
+      "description": "e.g., ['checkin','route_time','post_quiz','issue_log']",
+      "items": {
+        "type": "string"
+      },
+      "title": "Collection",
+      "type": "array"
+    }
+  },
+  "required": [
+    "targets"
+  ],
+  "title": "KPIPlan",
+  "type": "object"
+}

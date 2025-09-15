@@ -1,0 +1,21 @@
+{
+  "properties": {
+    "description": {
+      "description": "Shot description or prompt",
+      "title": "Description",
+      "type": "string"
+    },
+    "duration_sec": {
+      "maximum": 60,
+      "minimum": 1,
+      "title": "Duration Sec",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "description",
+    "duration_sec"
+  ],
+  "title": "VideoShot",
+  "type": "object"
+}
