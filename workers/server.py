@@ -3,6 +3,8 @@ from __future__ import annotations
 import base64
 import json
 from typing import Any, Dict, List
+import time
+import random
 
 from fastapi import FastAPI, HTTPException, Header
 import logging
@@ -264,6 +266,16 @@ def pubsub_push(body: Dict[str, Any], authorization: Optional[str] = Header(defa
         if not data_b64:
             raise ValueError("missing data")
 
+        # Optional processing delay for retry backoff; capped to 30s to avoid long handler blocks
+        try:
+            delay_ms_raw = attributes.get("delay_ms")
+            if delay_ms_raw is not None:
+                d = int(str(delay_ms_raw))
+                if d > 0:
+                    time.sleep(min(d, 30000) / 1000.0)
+        except Exception:
+            pass
+
         raw = base64.b64decode(data_b64)
         payload = json.loads(raw.decode("utf-8"))
         job_id = payload.get("job_id")
@@ -377,16 +389,33 @@ def pubsub_push(body: Dict[str, Any], authorization: Optional[str] = Header(defa
                 tname = (task if "task" in locals() else "unknown")
                 amap[tname] = int(amap.get(tname, 0)) + 1
                 update = {"error": str(e), "attempts": amap}
-                # Basic retry: republish immediately if attempts below threshold
-                try:
-                    max_try = getattr(settings, "retry_max_attempts", 3) if settings else 3
-                    if tname not in {"", "unknown"} and amap[tname] < max_try:
-                        pub = Publisher()
-                        pub.publish_json({"job_id": job_id, "task": tname}, attributes={"type": tname})
-                        update["retry"] = {"task": tname, "attempt": amap[tname]}
-                except Exception:
-                    pass
-                js.update_status(job_id, "error", update)
+        except Exception:
+            pass
+        # Basic retry with exponential backoff + jitter if attempts below threshold
+        try:
+            max_try = getattr(settings, "retry_max_attempts", 3) if settings else 3
+            if tname not in {"", "unknown"} and amap[tname] < max_try:
+                # backoff seconds: min(30, 2^attempt + jitter[0,1))
+                base = 2 ** min(amap[tname], 5)
+                delay_sec = min(30.0, float(base) + random.uniform(0.0, 1.0))
+                delay_ms = int(delay_sec * 1000)
+                pub = Publisher()
+                pub.publish_json(
+                    {"job_id": job_id, "task": tname},
+                    attributes={"type": tname, "delay_ms": str(delay_ms)},
+                )
+                update["retry"] = {"task": tname, "attempt": amap[tname], "delay_ms": delay_ms}
+        except Exception:
+            pass
+        js.update_status(job_id, "error", update)
+        try:
+            logger.error(
+                "task_failed job_id=%s task=%s attempt=%s error=%s",
+                job_id,
+                tname,
+                amap.get(tname),
+                str(e),
+            )
         except Exception:
             pass
         # Always return 200 to avoid redelivery storms
