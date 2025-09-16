@@ -19,13 +19,14 @@
 - 最小UI: `/view/start` からのジョブ起動、ジョブ画面でのリンク/Safety表示/再発行ボタン
 - Worker リトライ: 指数バックオフ＋ジッタ、遅延処理（`attributes.delay_ms`）とエラーログ（`task_failed`）
 - Push 同期: Pub/Sub pushEndpoint/audience/SA と Worker PUSH_* を `infra/sync_worker_push.sh` で同期
+- Web最小(Next.js): 入力フォーム→ジョブ起動→ジョブ詳細（ポーリング/リンク/Safety/再発行）を実装。API は Next の Route Handlers でプロキシ（`web/src/app/api/*`）、API 側は CORS 許可（`CORS_ALLOW_ORIGINS`）
 
 ## 2. 直近の課題・差分（Gap）
 
 - Contract Test の CI 組み込み（生成・検証は実施済）
-- フロント未実装（フォーム → 投入 → 進捗 → 成果 DL→KPI）
+- Web最小は実装済。UX 磨き込み（エラー表示/QR/ダウンロードUI）と Web CI/CD（Cloud Build/デプロイスクリプト）が未整備
 - KPI 集計（Webhook 格納・可視化）未実装
-- アラート運用: リトライは実装済。Log-based Alert / Error Reporting の通知設計
+- アラート運用: リトライは実装済。Log-based Alert / Error Reporting の通知設計（優先度低）
 - KB 運用改善（文書拡充・スニペット表示・自動再取込）
 
 ## 3. フェーズ別スプリント計画（MVP→α）
@@ -52,8 +53,8 @@
 
 ## 4. Next Actions（直近の実装順）
 
-1. アラート追加: Log-based Alert（`task_failed`）/ Error Reporting の最小通知
-2. Web 最小（Next.js）: 入力→ジョブ→進捗→DL（署名URL/QR）。既存 `/view/*` の要件を移植
+1. Web 磨き込み＋CI/CD: UX（エラー詳細/ダウンロードUI 完了、QR 追加予定）と Cloud Build/デプロイスクリプト
+2. アラート追加: Log-based Alert（`task_failed`）/ Error Reporting の最小通知（優先度低）
 3. Gemini 着手: Coordinator/Scenario の生成（プロンプト/出力拘束, フラグで段階導入）
 4. Imagen/Veo 本番 API: ポーリング/保存/URI 格納（段階導入）
 5. KB 運用改善: 文書拡充とスニペット精度検証、定期再取込
@@ -85,7 +86,9 @@
 
 ### Phase 3
 
-- [ ] Web フロント最小（フォーム/進捗/成果 DL）
+- [x] Web フロント最小（フォーム/進捗/成果 DL/再発行, Next.js + Route Handlers プロキシ）
+- [ ] Web 磨き込み（UX/QR/ダウンロードUI）
+- [ ] Web CI/CD（Cloud Build + デプロイスクリプト）
 - [ ] Webhook→KPI 集計 API→ ダッシュボード
 - [ ] 改善提案ループ（前回ログ参照）
 
@@ -105,6 +108,8 @@
  - Push OIDC 同期: `./infra/sync_worker_push.sh --project "$GCP_PROJECT" --region "$REGION" --service townready-worker --subscription townready-jobs-push --sa "townready-api@${GCP_PROJECT}.iam.gserviceaccount.com" --verify true --set-basics-env --dotenv ./.env`
  - 遅延処理: Pub/Sub publish 時 `--attribute type=content,delay_ms=5000` を付与し、処理遅延を確認
  - 失敗→バックオフ: Worker の `GCS_BUCKET` を一時不正化→新規ジョブで `content` 実行→`attempts`/`retry.delay_ms` 記録と `task_failed` ログを確認
+ - Webプロキシ: `curl -i -sS -X POST "$WEB_URL/api/generate/plan" -H 'Content-Type: application/json' --data-binary @tmp/plan.json` が 200/JSON。`curl -sS "$WEB_URL/api/jobs/$JOB_ID" | jq .` が取得可能
+ - CORS: API に `CORS_ALLOW_ORIGINS=$WEB_URL` を設定し、ブラウザからの直接APIコールが必要な場合に許可
  - CI トリガー（手動実行/ログ）:
    - 実行: `gcloud builds triggers run TownReady-CI --project "$GCP_PROJECT" --branch=main --substitutions=_API_URL="$API_URL"`
    - 一覧: `gcloud builds list --project "$GCP_PROJECT" --format='table(id,status,createTime)'`
@@ -163,6 +168,13 @@
 - Done: 署名URL再発行APIと最小UI（`/view/jobs/{job_id}` の再発行ボタン, `/view/start`）を実装・検証。Worker に指数バックオフ＋ジッタ/`delay_ms`遅延処理/`task_failed` エラーログを実装。`infra/sync_worker_push.sh` で pushEndpoint/audience/SA と Worker PUSH_* を同期し、Cloud Run 上で E2E（署名URL 200/再発行OK/遅延OK/連鎖OK）を確認
 - Issues: 通知運用（Log-based Alert/ Error Reporting）未設定、Web最小（Next.js）未実装
 - Next: Log-based Alert設定 → Web最小（Next.js） → Gemini/Imagen/Veo の段階導入
+
+```
+[2025-09-15 追加(2)]
+- Done: Web最小（Next.js）を実装・デプロイ（フォーム→起動→詳細）。Next Route Handlers で API をプロキシ（`/api/generate/plan`, `/api/jobs/*` 等）。API 側は CORS 許可を追加。API 500 は Cloud Run 環境変数（GCP_PROJECT 等）欠落が原因で、再設定により復旧
+- Issues: WebのUX（エラー表示/QR/ダウンロードUI）と CI/CD が未整備
+- Next: Web 磨き込み＋CI/CD → Gemini/Imagen/Veo の段階導入 → アラート（Log-based）
+```
 
 ---
 
