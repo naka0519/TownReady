@@ -33,6 +33,10 @@ class Settings:
     signed_url_ttl: int
     # Retry policy
     retry_max_attempts: int
+    # Generative AI (Gemini) staging flags
+    use_gemini: bool
+    gemini_model: str
+    vai_location: str
 
     @staticmethod
     def load() -> "Settings":
@@ -56,6 +60,9 @@ class Settings:
             retry_max_attempts = int(os.getenv("RETRY_MAX_ATTEMPTS", "3"))
         except Exception:
             retry_max_attempts = 3
+        use_gemini = str(os.getenv("GEMINI_ENABLED", "false")).lower() in {"1", "true", "yes", "on"}
+        gemini_model = os.getenv("GEMINI_MODEL", os.getenv("GEMINI", "gemini-1.5-pro"))
+        vai_location = os.getenv("VAI_LOCATION", region)
 
         if not project:
             raise RuntimeError("GCP_PROJECT is not set in environment")
@@ -75,4 +82,7 @@ class Settings:
             push_service_account=push_service_account,
             signed_url_ttl=signed_url_ttl,
             retry_max_attempts=retry_max_attempts,
+            use_gemini=use_gemini,
+            gemini_model=gemini_model,
+            vai_location=vai_location,
         )

@@ -24,8 +24,12 @@ export default function Home() {
         constraints: { max_duration_min: 45, limited_outdoor: true },
         kb_refs: []
       };
-      const res = await fetch(`${API_BASE}/api/generate/plan`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-      if (!res.ok) throw new Error('API error');
+      const endpoint = API_BASE ? `${API_BASE}/api/generate/plan` : `/api/generate/plan`;
+      const res = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`API ${res.status}: ${text?.slice(0, 300)}`);
+      }
       const j = await res.json();
       window.location.href = `/jobs/${j.job_id}`;
     } catch (e: any) {
@@ -59,7 +63,11 @@ export default function Home() {
           <input value={hazards} onChange={e=>setHazards(e.target.value)} style={{ width: '100%', padding: 6 }} />
         </label>
         <button onClick={submit} disabled={loading} style={{ padding: '8px 12px' }}>{loading ? '起動中...' : '開始'}</button>
-        {error && <div style={{ color: '#c33' }}>{error}</div>}
+        {error && (
+          <div style={{ color: '#c33', whiteSpace: 'pre-wrap', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 12 }}>
+            {error}
+          </div>
+        )}
       </div>
     </div>
   );

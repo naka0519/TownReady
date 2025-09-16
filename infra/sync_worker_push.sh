@@ -89,27 +89,33 @@ gcloud pubsub subscriptions modify-push-config "$SUB" \
   --push-auth-token-audience="$AUDIENCE" 1>/dev/null
 echo "[OK] Subscription updated: $SUB"
 
-echo "[STEP] Update Worker env (PUSH_*)"
+echo "[STEP] Update Worker env (PUSH_* and optional basics/Gemini)"
 ENV_SET=(
   "PUSH_VERIFY=$VERIFY"
   "PUSH_AUDIENCE=$AUDIENCE"
   "PUSH_SERVICE_ACCOUNT=$SA"
 )
 
+add_env() { [[ -n "${!1-}" ]] && ENV_SET+=("$1=${!1}"); }
+
 if $SET_BASICS; then
   echo "[INFO] Including basics env from current shell (if set)"
-  add_env() { [[ -n "${!1-}" ]] && ENV_SET+=("$1=${!1}"); }
   add_env GCP_PROJECT
   add_env REGION
   add_env FIRESTORE_DB
   add_env GCS_BUCKET
   add_env PUBSUB_TOPIC
+  # Also include Gemini flags if present to avoid being dropped by updates
+  add_env GEMINI_ENABLED
+  add_env GEMINI_MODEL
+  add_env VAI_LOCATION
 fi
 
 JOINED=$(IFS=, ; printf '%s' "${ENV_SET[*]}")
+# Use --update-env-vars to avoid overwriting unrelated environment variables (e.g., GEMINI_*)
 gcloud run services update "$SERVICE" \
   --project "$PROJECT" --region "$REGION" \
-  --set-env-vars "$JOINED" 1>/dev/null
+  --update-env-vars "$JOINED" 1>/dev/null
 echo "[OK] Worker env updated"
 
 echo "[STEP] Verify settings"
@@ -119,4 +125,3 @@ echo "[INFO] Worker env (subset):"
 gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" --format='value(spec.template.spec.containers[0].env)'
 
 echo "[DONE] Sync complete"
-

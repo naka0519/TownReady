@@ -19,12 +19,17 @@ except Exception:  # pragma: no cover - libs should be present via google-cloud 
 
 try:
     from GCP_AI_Agent_hackathon.services import JobsStore, Settings, Storage, Publisher
+    from GCP_AI_Agent_hackathon.services.gemini_client import Gemini  # type: ignore
 except Exception:
     import sys
     from pathlib import Path
 
     sys.path.append(str(Path(__file__).resolve().parents[1]))
     from services import JobsStore, Settings, Storage, Publisher  # type: ignore
+    try:
+        from services.gemini_client import Gemini  # type: ignore
+    except Exception:  # pragma: no cover
+        Gemini = None  # type: ignore
 
 
 app = FastAPI(title="TownReady Worker", version="0.2.0")
@@ -75,6 +80,19 @@ def _verify_push(authorization: Optional[str]) -> bool:
 
 
 def _build_plan(job_payload: Dict[str, Any]) -> Dict[str, Any]:
+    # Optional Gemini generation (staged via env)
+    try:
+        settings = Settings.load()
+        if getattr(settings, "use_gemini", False) and Gemini is not None:
+            g = Gemini(settings)
+            raw = g.generate_plan(job_payload)
+            # normalize minimal keys
+            scenarios = raw.get("scenarios") or []
+            acceptance = raw.get("acceptance") or {}
+            handoff = raw.get("handoff") or {"to": "Scenario Agent", "with": {}}
+            return {"scenarios": scenarios, "acceptance": acceptance, "handoff": handoff}
+    except Exception as e:
+        logger.exception("gemini_plan_failed: %s", e)
     loc = job_payload.get("location", {})
     parts = job_payload.get("participants", {})
     hazard = job_payload.get("hazard", {})
@@ -108,6 +126,36 @@ def _build_plan(job_payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _build_scenario(job_id: str, job_payload: Dict[str, Any], storage: Optional[Storage]) -> Dict[str, Any]:
+    # Optional Gemini generation (staged via env)
+    try:
+        settings = Settings.load()
+        if getattr(settings, "use_gemini", False) and Gemini is not None:
+            g = Gemini(settings)
+            raw = g.generate_scenario(job_payload) or {}
+            assets_in = raw.get("assets") or raw
+            # Coerce to expected structure
+            script_md = assets_in.get("script_md") or ""
+            roles_csv = assets_in.get("roles_csv") or "role,name\nLead,田中\nSafety,佐藤\n"
+            routes = assets_in.get("routes") or []
+            langs = assets_in.get("languages") or (job_payload.get("participants", {}).get("languages") or ["ja"])
+            assets: Dict[str, Any] = {"script_md": script_md, "roles_csv": roles_csv, "routes": routes, "languages": langs}
+            if storage:
+                script_path = f"jobs/{job_id}/script.md"
+                roles_path = f"jobs/{job_id}/roles.csv"
+                routes_path = f"jobs/{job_id}/routes.json"
+                assets["script_md_uri"] = storage.upload_text(script_path, script_md, "text/markdown")
+                assets["roles_csv_uri"] = storage.upload_text(roles_path, roles_csv, "text/csv")
+                assets["routes_json_uri"] = storage.upload_text(routes_path, json.dumps(routes, ensure_ascii=False, indent=2), "application/json")
+                try:
+                    settings2 = Settings.load()
+                    assets["script_md_url"] = storage.signed_url(script_path, ttl_seconds=settings2.signed_url_ttl, download_name="script.md")
+                    assets["roles_csv_url"] = storage.signed_url(roles_path, ttl_seconds=settings2.signed_url_ttl, download_name="roles.csv")
+                    assets["routes_json_url"] = storage.signed_url(routes_path, ttl_seconds=settings2.signed_url_ttl, download_name="routes.json")
+                except Exception as se:  # pragma: no cover
+                    logger.exception("signed_url_failed_scenario_gemini: %s", se)
+            return {"type": "scenario", "assets": assets}
+    except Exception as e:
+        logger.exception("gemini_scenario_failed: %s", e)
     loc = job_payload.get("location", {})
     parts = job_payload.get("participants", {})
     hazard = job_payload.get("hazard", {})
