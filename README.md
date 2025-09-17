@@ -12,6 +12,8 @@
 
 を自動生成する、**マルチエージェント × マルチモーダル**の GCP アプリです。
 
+実装の詳細進捗は `docs/SPRINT_PLAN.md` に集約しています。
+
 ### 価値提案（1 行）
 
 > **「あなたの街専用の“訓練一式”を、地図 → 台本 → 掲示 → 短尺動画まで自動生成し、次回は“改善案”から始められる。」**
@@ -32,44 +34,47 @@
 
 - **フロント**: Next.js (SSR) → Cloud Run
 - **バック**: FastAPI (Python) → Cloud Run
-- **ジョブ**: Pub/Sub + ワーカー（Content 生成など重い処理）
+- **ジョブ**: Pub/Sub + ワーカー（非同期処理）
 - **データ**: Firestore（案件/ジョブ/メタ）、GCS（生成物）
-- **AI**: Vertex AI（Gemini 2.0 Pro / Imagen / Veo / Agent Builder or ADK）、Vertex AI Search（KB）
+- **AI**: Vertex AI（Gemini / Imagen / Veo）、Vertex AI Search（KB）
 
 ```
 [Next.js] ⇄ [FastAPI] → Pub/Sub → [Worker]
    │                         │
-   │                         ├─ Vertex AI (Gemini/Imagen/Veo/Agent)
+   │                         ├─ Vertex AI (Gemini/Imagen/Veo)
    │                         └─ Vertex AI Search (KB)
-   └─ GCS(画像/動画)・Firestore(メタ)・Auth
+   └─ GCS(画像/動画)・Firestore(メタ)・署名URL
 ```
 
 ---
 
-## ディレクトリ構成（提案）
+## ディレクトリ構成
 
 ```
 .
 ├─ api/                 # FastAPI エンドポイント
-├─ workers/             # Pub/Sub ワーカー（Content生成など）
+├─ workers/             # Pub/Sub ワーカー（非同期処理）
 ├─ web/                 # Next.js フロント
-├─ schemas/             # JSON Schema / Pydantic モデル
+├─ schemas/             # Pydantic モデル / JSON Schema
+├─ services/            # Firestore/GCS/PubSub/Gemini/KB クライアント
 ├─ docs/                # プロダクト仕様・運用ドキュメント
 ├─ kb/                  # 知識ベース（Markdown/URLカタログ）
-├─ infra/               # IaC（任意: Terraform）/ デプロイスクリプト
+├─ infra/               # デプロイスクリプト / Cloud Build 設定
 ├─ .env.example         # 環境変数のサンプル
 └─ README.md
 ```
 
 ---
 
-## API（抜粋）
+## API（実装済み抜粋）
 
-- `POST /api/generate/plan` — Coordinator 起動（シナリオ候補 & 要件）。jobs に記録し Pub/Sub へ発行
-- `POST /api/generate/scenario` — 台本・役割・導線生成（ジョブ化して Pub/Sub へ）
-- `POST /api/review/safety` — 安全レビュー（KB 根拠, ジョブ化）
-- `POST /api/generate/content` — 画像/動画生成（Imagen/Veo, ジョブ化）
-- `GET  /api/jobs/{job_id}` — ジョブ状態
+- `POST /api/generate/plan` — プラン生成をジョブ化し Pub/Sub へ発行
+- `POST /api/generate/scenario` — シナリオ生成をジョブ化
+- `POST /api/review/safety` — 安全レビューをジョブ化
+- `POST /api/generate/content` — コンテンツ生成をジョブ化
+- `GET  /api/jobs/{job_id}` — ジョブ状態取得
+- `POST /api/jobs/{job_id}/assets/refresh` — 署名URLの再発行
+- `GET  /api/kb/search` — 知識ベース検索
 - `POST /webhook/forms` — アンケート集計受信
 - `POST /webhook/checkin` — 参加者チェックイン受信
 
@@ -173,19 +178,21 @@ REGION=asia-northeast1
 FIRESTORE_DB=townready
 GCS_BUCKET=gs://your-bucket
 VAI_LOCATION=asia-northeast1
-IMAGEN_MODEL=imagen-3.0
-VEO_MODEL=veo-2.0
-GEMINI_MODEL=gemini-2.0-pro
+GEMINI_MODEL=gemini-1.5-pro
+GEMINI_ENABLED=false
 KB_DATASET=kb_default
 PUBSUB_TOPIC=townready-jobs
-# Vertex AI Search (KB) settings
+# Vertex AI Search (KB)
 KB_SEARCH_LOCATION=global
 KB_SEARCH_COLLECTION=default_collection
 KB_SEARCH_DATASTORE=${KB_DATASET}
-# Optional (Push OIDC 検証):
+# Optional (Push OIDC 検証)
 # PUSH_VERIFY=true
 # PUSH_AUDIENCE=https://<WORKER_URL>/pubsub/push
 # PUSH_SERVICE_ACCOUNT=townready-api@your-project.iam.gserviceaccount.com
+# 署名URL/リトライ
+SIGNED_URL_TTL=3600
+RETRY_MAX_ATTEMPTS=3
 ```
 
 ### ローカル起動（例）
@@ -195,6 +202,8 @@ KB_SEARCH_DATASTORE=${KB_DATASET}
 cd api && uvicorn app:app --reload --port 8080
 # Web
 cd web && npm i && npm run dev -- --port 3000
+# Worker（任意）
+cd workers && uvicorn server:app --reload --port 8081
 ```
 
 ### デプロイ（Cloud Run, 例）
@@ -268,19 +277,19 @@ Push 配信（Pub/Sub → Worker）は Cloud Run URL の `/pubsub/push`（POST�
 
 ※ ヘルスチェックは `/health` を利用してください（`/healthz` は環境により 404 になる場合があります）。
 
-### いま実装されているジョブ処理
+### いま実装されているジョブ処理（概要）
 
-- plan: 入力からシナリオ候補・KPI プラン・受け入れ条件を生成（Firestore へ結果保存）
-- scenario: 台本(Markdown)/役割(CSV)/ルート(JSON)を生成し GCS に保存（URI を `result.assets.*_uri` として返却）
-- safety: ルールベースの安全指摘（要配慮者/屋外制限/初期消火 等）を返却
-- content: ポスター/動画用プロンプトとショットリストを生成し GCS に保存
-- すべて Pub/Sub 経由で Worker が処理。冪等性あり（`done`/`error` は再処理しない）
-- Push OIDC 検証（任意）: `PUSH_VERIFY=true` で有効化。audience/URL/SA が一致しないと未処理（200 応答で ACK されるため注意）
+- plan: 入力からシナリオ候補・KPI プラン・受け入れ条件を生成（Firestore 保存）
+- scenario: 台本(Markdown)/役割(CSV)/ルート(JSON)を生成し GCS に保存（`assets.*_uri`/`*_url` 付与）
+- safety: ルールベースの安全指摘を返却（KB 検索のヒットを添付）
+- content: ポスター/動画用プロンプトとショットリストを生成し GCS に保存（署名URL付与）
+- 全タスクは Pub/Sub 経由で Worker が処理（冪等・自動連鎖・指数バックオフ）
+- Push OIDC 検証（任意）: `PUSH_VERIFY=true` で有効化
 
 ### IAM（最低限）
 
 - API 実行 SA: `roles/datastore.user`, `roles/pubsub.publisher`
-- Worker 実行 SA: `roles/datastore.user`, （GCS 出力時）`roles/storage.objectAdmin` を対象バケットに付与
+- Worker 実行 SA: `roles/datastore.user`, `roles/storage.objectAdmin`（対象バケット）, `roles/iam.serviceAccountTokenCreator`
 
 ### トラブルシューティング
 
