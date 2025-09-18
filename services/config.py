@@ -37,6 +37,8 @@ class Settings:
     use_gemini: bool
     gemini_model: str
     vai_location: str
+    gemini_timeout_sec: int
+    gemini_max_retries: int
 
     @staticmethod
     def load() -> "Settings":
@@ -61,8 +63,17 @@ class Settings:
         except Exception:
             retry_max_attempts = 3
         use_gemini = str(os.getenv("GEMINI_ENABLED", "false")).lower() in {"1", "true", "yes", "on"}
-        gemini_model = os.getenv("GEMINI_MODEL", os.getenv("GEMINI", "gemini-1.5-pro"))
-        vai_location = os.getenv("VAI_LOCATION", region)
+        # Default to stable public model/region
+        gemini_model = os.getenv("GEMINI_MODEL", os.getenv("GEMINI", "gemini-2.0-flash"))
+        vai_location = os.getenv("VAI_LOCATION", os.getenv("VERTEX_LOCATION", "us-central1"))
+        try:
+            gemini_timeout_sec = int(os.getenv("GEMINI_TIMEOUT_SEC", "25"))
+        except Exception:
+            gemini_timeout_sec = 25
+        try:
+            gemini_max_retries = int(os.getenv("GEMINI_MAX_RETRIES", "2"))
+        except Exception:
+            gemini_max_retries = 2
 
         if not project:
             raise RuntimeError("GCP_PROJECT is not set in environment")
@@ -85,4 +96,6 @@ class Settings:
             use_gemini=use_gemini,
             gemini_model=gemini_model,
             vai_location=vai_location,
+            gemini_timeout_sec=gemini_timeout_sec,
+            gemini_max_retries=gemini_max_retries,
         )

@@ -1,0 +1,9 @@
+substitutions:
+  _IMAGE_URI: ""
+
+steps:
+  - name: "gcr.io/cloud-builders/docker"
+    args: ["build", "-f", "web/Dockerfile", "-t", "${_IMAGE_URI}", "web"]
+
+images:
+  - "${_IMAGE_URI}"

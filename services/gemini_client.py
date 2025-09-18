@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 from typing import Any, Dict, Optional
+import concurrent.futures
+import time
 
 from .config import Settings
 
@@ -48,8 +50,27 @@ class Gemini:
         gen_cfg = {"response_mime_type": "application/json", "temperature": 0.2}
         if GenerationConfig is not None:
             gen_cfg = GenerationConfig(response_mime_type="application/json", temperature=0.2)  # type: ignore
-        resp = model.generate_content(parts, generation_config=gen_cfg)  # type: ignore
-        text = getattr(resp, "text", None) or getattr(resp.candidates[0].content.parts[0], "text", "")  # type: ignore
+        # Run with timeout + retries
+        timeout_s = max(5, int(getattr(self.settings, "gemini_timeout_sec", 25)))
+        max_retries = max(0, int(getattr(self.settings, "gemini_max_retries", 2)))
+
+        def _call():
+            return model.generate_content(parts, generation_config=gen_cfg)  # type: ignore
+
+        last_err: Optional[Exception] = None
+        for attempt in range(0, max_retries + 1):
+            try:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+                    fut = ex.submit(_call)
+                    resp = fut.result(timeout=timeout_s)
+                text = getattr(resp, "text", None) or getattr(resp.candidates[0].content.parts[0], "text", "")  # type: ignore
+                break
+            except Exception as e:  # pragma: no cover
+                last_err = e
+                # backoff: 0.5, 1.0 seconds
+                time.sleep(0.5 * (attempt + 1))
+        else:
+            raise RuntimeError(f"gemini_call_failed: {last_err}")
         # Primary parse
         try:
             return json.loads(text)
@@ -87,7 +108,17 @@ Return strictly a JSON object with keys:
   handoff: {{"to": "Scenario Agent", "with": {{"scenario_id": "S1"}}}}
 No markdown fences. Ensure strings are valid JSON strings (escape newlines as \\n).
 """
-        return self._gen_json(prompt)
+        raw = self._gen_json(prompt)
+        # Minimal validation: require scenarios[] and acceptance/handoff keys
+        if not isinstance(raw, dict):
+            raise RuntimeError("gemini_invalid_plan: not an object")
+        if not isinstance(raw.get("scenarios"), list) or len(raw.get("scenarios")) == 0:
+            raise RuntimeError("gemini_invalid_plan: scenarios missing")
+        if not isinstance(raw.get("acceptance"), dict):
+            raise RuntimeError("gemini_invalid_plan: acceptance missing")
+        if not isinstance(raw.get("handoff"), dict):
+            raise RuntimeError("gemini_invalid_plan: handoff missing")
+        return raw
 
     def generate_scenario(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         loc = payload.get("location", {})
@@ -107,4 +138,14 @@ Return strictly a JSON object with key "assets": {{
 }}.
 No markdown code fences. All strings must be valid JSON strings with escaped newlines (\\n).
 """
-        return self._gen_json(prompt)
+        raw = self._gen_json(prompt)
+        # Minimal validation: assets.script_md/roles_csv strings
+        assets = raw.get("assets") if isinstance(raw, dict) else None
+        if not isinstance(assets, dict):
+            raise RuntimeError("gemini_invalid_scenario: assets missing")
+        if not isinstance(assets.get("script_md"), str) or not isinstance(assets.get("roles_csv"), str):
+            raise RuntimeError("gemini_invalid_scenario: script_md/roles_csv must be strings")
+        routes = assets.get("routes")
+        if routes is not None and not isinstance(routes, list):
+            raise RuntimeError("gemini_invalid_scenario: routes must be a list")
+        return raw
