@@ -7,3 +7,9 @@ steps:
 
 images:
   - "${_IMAGE_URI}"
+
+# Ensure builds run without a user-owned GCS logs bucket when a
+# service account is specified on the trigger by writing logs only
+# to Cloud Logging. This avoids INVALID_ARGUMENT errors at trigger run.
+options:
+  logging: CLOUD_LOGGING_ONLY
