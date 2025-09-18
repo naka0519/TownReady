@@ -73,7 +73,7 @@
 - `POST /api/review/safety` — 安全レビューをジョブ化
 - `POST /api/generate/content` — コンテンツ生成をジョブ化
 - `GET  /api/jobs/{job_id}` — ジョブ状態取得
-- `POST /api/jobs/{job_id}/assets/refresh` — 署名URLの再発行
+- `POST /api/jobs/{job_id}/assets/refresh` — 署名 URL の再発行
 - `GET  /api/kb/search` — 知識ベース検索
 - `POST /webhook/forms` — アンケート集計受信
 - `POST /webhook/checkin` — 参加者チェックイン受信
@@ -82,7 +82,11 @@
 
 ```json
 {
-  "location": { "address": "横浜市瀬谷区＊＊＊", "lat": 35.47, "lng": 139.49 },
+  "location": {
+    "address": "横浜市戸塚区戸塚町",
+    "lat": 35.401,
+    "lng": 139.532
+  },
   "participants": {
     "total": 120,
     "children": 25,
@@ -256,7 +260,7 @@ curl -sS -X POST \
   -H 'Content-Type: application/json' \
   -d @- https://<YOUR_API_SERVICE>/api/generate/plan <<'JSON'
 {
-  "location": { "address": "横浜市瀬谷区＊＊＊", "lat": 35.47, "lng": 139.49 },
+  "location": { "address": "横浜市戸塚区戸塚町", "lat": 35.401, "lng": 139.532 },
   "participants": { "total": 120, "children": 25, "elderly": 18, "wheelchair": 3, "languages": ["ja", "en"] },
   "hazard": { "types": ["earthquake", "fire"], "drill_date": "2025-10-12", "indoor": true, "nighttime": false },
   "constraints": { "max_duration_min": 45, "limited_outdoor": true },
@@ -282,7 +286,7 @@ Push 配信（Pub/Sub → Worker）は Cloud Run URL の `/pubsub/push`（POST�
 - plan: 入力からシナリオ候補・KPI プラン・受け入れ条件を生成（Firestore 保存）
 - scenario: 台本(Markdown)/役割(CSV)/ルート(JSON)を生成し GCS に保存（`assets.*_uri`/`*_url` 付与）
 - safety: ルールベースの安全指摘を返却（KB 検索のヒットを添付）
-- content: ポスター/動画用プロンプトとショットリストを生成し GCS に保存（署名URL付与）
+- content: ポスター/動画用プロンプトとショットリストを生成し GCS に保存（署名 URL 付与）
 - 全タスクは Pub/Sub 経由で Worker が処理（冪等・自動連鎖・指数バックオフ）
 - Push OIDC 検証（任意）: `PUSH_VERIFY=true` で有効化
 

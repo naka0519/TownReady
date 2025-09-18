@@ -5,9 +5,9 @@ import { useState } from 'react';
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || '';
 
 export default function Home() {
-  const [address, setAddress] = useState('横浜市瀬谷区＊＊＊');
-  const [lat, setLat] = useState('35.47');
-  const [lng, setLng] = useState('139.49');
+  const [address, setAddress] = useState('横浜市戸塚区戸塚町');
+  const [lat, setLat] = useState('35.401');
+  const [lng, setLng] = useState('139.532');
   const [langs, setLangs] = useState('ja,en');
   const [hazards, setHazards] = useState('earthquake,fire');
   const [loading, setLoading] = useState(false);

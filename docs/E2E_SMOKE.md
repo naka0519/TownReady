@@ -49,7 +49,7 @@ URL=$(jq -r '.result.poster_prompts_url // empty' /tmp/job.json); [ -n "$URL" ] 
 ## 3) 連鎖（plan→scenario→safety→content）完了
 ```bash
 cat <<'JSON' > /tmp/plan.json
-{"location":{"address":"横浜市瀬谷区＊＊＊","lat":35.47,"lng":139.49},
+{"location":{"address":"横浜市戸塚区戸塚町","lat":35.401,"lng":139.532},
  "participants":{"total":120,"children":25,"elderly":18,"wheelchair":3,"languages":["ja","en"]},
  "hazard":{"types":["earthquake","fire"],"drill_date":"2025-10-12","indoor":true,"nighttime":false},
  "constraints":{"max_duration_min":45,"limited_outdoor":true},
@@ -94,4 +94,3 @@ gcloud logging read \
 - API: `uvicorn api.app:app --port 8080`
 - Worker: `uvicorn workers.server:app --port 8081` / `PUSH_VERIFY=false`
 - 手動 Push: `curl -X POST localhost:8081/pubsub/push -d '{"message":{"data":"<base64>"}}'`
-
