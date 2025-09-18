@@ -20,7 +20,7 @@ except Exception:
     from schemas import GenerateBaseRequest  # type: ignore
 
 sample = {
-  "location": {"address": "横浜市戸塚区戸塚町", "lat": 35.401, "lng": 139.532},
+  "location": {"address": "横浜市戸塚区戸塚町上倉田町７６９−１", "lat": 35.398961, "lng": 139.537466},
   "participants": {"total": 120, "children": 25, "elderly": 18, "wheelchair": 3, "languages": ["ja", "en"]},
   "hazard": {"types": ["earthquake", "fire"], "drill_date": "2025-10-12", "indoor": True, "nighttime": False},
   "constraints": {"max_duration_min": 45, "limited_outdoor": True},
@@ -39,7 +39,7 @@ if [[ -n "${API_URL:-}" ]]; then
   mkdir -p tmp
   cat > tmp/ct_plan.json <<'JSON'
 {
-  "location": { "address": "横浜市戸塚区戸塚町", "lat": 35.401, "lng": 139.532 },
+  "location": { "address": "横浜市戸塚区戸塚町上倉田町７６９−１", "lat": 35.398961, "lng": 139.537466 },
   "participants": {"total": 120, "children": 25, "elderly": 18, "wheelchair": 3, "languages": ["ja","en"]},
   "hazard": {"types": ["earthquake","fire"], "drill_date": "2025-10-12", "indoor": true, "nighttime": false},
   "constraints": {"max_duration_min": 45, "limited_outdoor": true},

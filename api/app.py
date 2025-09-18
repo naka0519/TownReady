@@ -424,10 +424,10 @@ def view_start() -> Any:  # returns HTML
     <p>住所や属性を入力して <code>/api/generate/plan</code> を起動します。</p>
     <div>
       <label>住所</label>
-      <input id=\"address\" value=\"横浜市戸塚区戸塚町\" />
+      <input id=\"address\" value=\"横浜市戸塚区戸塚町上倉田町７６９−１\" />
       <div style=\"display:flex; gap:8px;\">
-        <div><label>lat</label><input id=\"lat\" value=\"35.401\"/></div>
-        <div><label>lng</label><input id=\"lng\" value=\"139.532\"/></div>
+        <div><label>lat</label><input id=\"lat\" value=\"35.398961\"/></div>
+        <div><label>lng</label><input id=\"lng\" value=\"139.537466\"/></div>
       </div>
       <label>言語（カンマ区切り）</label>
       <input id=\"langs\" value=\"ja,en\" />

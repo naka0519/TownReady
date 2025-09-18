@@ -1,12 +1,13 @@
 # E2E スモーク手順（MVP）
 
-この手順は、API → ジョブ投入 → Worker 処理 → Firestore 反映 → 署名URLで成果を取得、までの最小疎通を確認します。
+この手順は、API → ジョブ投入 → Worker 処理 → Firestore 反映 → 署名 URL で成果を取得、までの最小疎通を確認します。
 
 ## 前提
+
 - Cloud Run に API/Worker をデプロイ済み
 - Pub/Sub Push サブスクが Worker の `/pubsub/push` に紐付いている
 - GCS バケットと Firestore が設定済み、`.env` に `GCP_PROJECT/REGION/GCS_BUCKET/FIRESTORE_DB/PUBSUB_TOPIC` などが設定済み
-- 署名URLを使うために、Worker 実行SAに以下が付与済み
+- 署名 URL を使うために、Worker 実行 SA に以下が付与済み
   - `roles/iam.serviceAccountTokenCreator`
   - バケットに `roles/storage.objectAdmin`
   - API 有効化: `iamcredentials.googleapis.com`
@@ -18,13 +19,15 @@ export SERVICE_WORKER="townready-worker"
 ```
 
 ## 1) API/Backend ヘルス
+
 ```bash
 curl -sS "$API_URL/health" | jq .
 curl -sS "$API_URL/health/firestore" | jq .
 curl -sS "$WORKER_URL/health" | jq .
 ```
 
-## 2) Content 単体ジョブ（署名URL確認）
+## 2) Content 単体ジョブ（署名 URL 確認）
+
 ```bash
 cat <<'JSON' > /tmp/content.json
 {"assets": {}, "languages": ["ja","en"]}
@@ -47,9 +50,10 @@ URL=$(jq -r '.result.poster_prompts_url // empty' /tmp/job.json); [ -n "$URL" ] 
 期待: `*_url` が非 null, `curl -I` が 200
 
 ## 3) 連鎖（plan→scenario→safety→content）完了
+
 ```bash
 cat <<'JSON' > /tmp/plan.json
-{"location":{"address":"横浜市戸塚区戸塚町","lat":35.401,"lng":139.532},
+{"location":{"address":"横浜市戸塚区戸塚町上倉田町７６９−１","lat":35.398961,"lng":139.537466},
  "participants":{"total":120,"children":25,"elderly":18,"wheelchair":3,"languages":["ja","en"]},
  "hazard":{"types":["earthquake","fire"],"drill_date":"2025-10-12","indoor":true,"nighttime":false},
  "constraints":{"max_duration_min":45,"limited_outdoor":true},
@@ -69,7 +73,8 @@ jq '.assets | {script_md_url,roles_csv_url,routes_json_url}' /tmp/job.json
 
 期待: `completed_tasks` に `["plan","scenario","safety","content"]`、`assets.*_url` の `curl -I` が 200
 
-## 4) ログ監視（Workerの署名/連鎖）
+## 4) ログ監視（Worker の署名/連鎖）
+
 ```bash
 gcloud logging read \
   'resource.type="cloud_run_revision" AND resource.labels.service_name="'"$SERVICE_WORKER"'" AND resource.labels.location="'"$REGION"'"' \
@@ -91,6 +96,7 @@ gcloud logging read \
 ---
 
 ## 付録（ローカル代替）
+
 - API: `uvicorn api.app:app --port 8080`
 - Worker: `uvicorn workers.server:app --port 8081` / `PUSH_VERIFY=false`
 - 手動 Push: `curl -X POST localhost:8081/pubsub/push -d '{"message":{"data":"<base64>"}}'`
