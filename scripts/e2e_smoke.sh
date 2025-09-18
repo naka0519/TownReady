@@ -7,7 +7,7 @@ API_URL=${API_URL:?"API_URL is required (set in .env)"}
 
 echo "[E2E] Kick plan job"
 cat <<'JSON' > /tmp/plan.json
-{"location":{"address":"横浜市瀬谷区＊＊＊","lat":35.47,"lng":139.49},
+{"location":{"address":"横浜市戸塚区戸塚町上倉田町７６９−１","lat":35.398961,"lng":139.537466},
  "participants":{"total":120,"children":25,"elderly":18,"wheelchair":3,"languages":["ja","en"]},
  "hazard":{"types":["earthquake","fire"],"drill_date":"2025-10-12","indoor":true,"nighttime":false},
  "constraints":{"max_duration_min":45,"limited_outdoor":true},
@@ -39,4 +39,3 @@ URL2=$(jq -r '.results.content.poster_prompts_url // empty' /tmp/job.json)
 if [[ -n "$URL2" ]]; then curl -sI "$URL2" | head -n1; else echo "[E2E] WARN: content URL missing"; fi
 
 echo "[E2E] Done"
-
