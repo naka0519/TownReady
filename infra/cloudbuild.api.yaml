@@ -8,3 +8,5 @@ steps:
 images:
   - "${_IMAGE_URI}"
 
+options:
+  logging: CLOUD_LOGGING_ONLY

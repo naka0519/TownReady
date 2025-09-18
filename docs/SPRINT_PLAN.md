@@ -20,12 +20,12 @@
 - Worker リトライ: 指数バックオフ＋ジッタ、遅延処理（`attributes.delay_ms`）とエラーログ（`task_failed`）
 - Push 同期: Pub/Sub pushEndpoint/audience/SA と Worker PUSH\_\* を `infra/sync_worker_push.sh` で同期
 - Web 最小(Next.js): 入力フォーム → ジョブ起動 → ジョブ詳細（ポーリング/リンク/Safety/再発行）を実装。API は Next の Route Handlers でプロキシ（`web/src/app/api/*`）、API 側は CORS 許可（`CORS_ALLOW_ORIGINS`）
- - Web UX 強化（初期）: エラー詳細表示、ダウンロード UI（download 属性/URL コピー/署名 URL の有効期限表示）を実装
- - Web UI/UX 改良（実装分）: 進捗タイムライン（plan→scenario→safety→content）表示、署名 URL 期限切れの自動再発行（60s クールダウン・トースト通知付き）、各成果リンクの QR 表示/クリップボードコピー、aria-live/role=alert などアクセシビリティ補助
+- Web UX 強化（初期）: エラー詳細表示、ダウンロード UI（download 属性/URL コピー/署名 URL の有効期限表示）を実装
+- Web UI/UX 改良（実装分）: 進捗タイムライン（plan→scenario→safety→content）表示、署名 URL 期限切れの自動再発行（60s クールダウン・トースト通知付き）、各成果リンクの QR 表示/クリップボードコピー、aria-live/role=alert などアクセシビリティ補助
 - Web CI/CD（初期）: `infra/cloudbuild.web.yaml` を追加し、`infra/deploy_web.sh` でビルド/デプロイ。GitHub/CSR 向けトリガー作成スクリプト（`infra/create_web_trigger_github.sh`, `infra/create_web_trigger_csr.sh`）を追加
 - Gemini 初期導入: Worker に Vertex AI (Gemini) を段階導入。`services/gemini_client.py` で JSON 厳密出力（response_mime_type=application/json）・パースフォールバック・タイムアウト/再試行を実装。`us-central1 × gemini-2.0-flash` で Plan/Scenario 生成を確認
-- Web UX 強化: エラー詳細表示、ダウンロード UI（download 属性/URLコピー/署名URLの有効期限表示）を実装
- - Gemini 初期導入: Worker に Vertex AI (Gemini) を段階導入。`services/gemini_client.py` で JSON 厳密出力（response_mime_type=application/json）とフォールバックを実装。`us-central1 × gemini-2.0-flash` で Plan/Scenario 生成を確認
+- Web UX 強化: エラー詳細表示、ダウンロード UI（download 属性/URL コピー/署名 URL の有効期限表示）を実装
+- Gemini 初期導入: Worker に Vertex AI (Gemini) を段階導入。`services/gemini_client.py` で JSON 厳密出力（response_mime_type=application/json）とフォールバックを実装。`us-central1 × gemini-2.0-flash` で Plan/Scenario 生成を確認
 
 ## 2. 直近の課題・差分（Gap）
 
@@ -122,9 +122,10 @@
   - CORS: API に `CORS_ALLOW_ORIGINS=$WEB_URL` を設定し、ブラウザからの直接 API コールが必要な場合に許可
   - Web UI/UX（タイムライン）: `/jobs/{JOB_ID}` で plan→scenario→safety→content の各ステップが「実行中/完了/未着手」の色分けで表示される
   - Web UI/UX（自動再発行）: SIGNED_URL_TTL を短時間に設定してデプロイ → 署名 URL が (expired) 表示になった際、60 秒クールダウン付きで自動再発行され、トースト「署名 URL を自動再発行しました」が 3 秒表示される
-  - Web UI/UX（QR/コピー/有効期限）: 各リンク横の「コピー」ボタンで URL がクリップボードへ保存、「QR」ボタンで QR 画像が表示、右側の `(expires in ~Xm)` が推移する。HEADで 200 を確認: `curl -sSI "$(curl -sS $API_URL/api/jobs/$JOB_ID | jq -r '.assets.script_md_url')" | head -n1`
+  - Web UI/UX（QR/コピー/有効期限）: 各リンク横の「コピー」ボタンで URL がクリップボードへ保存、「QR」ボタンで QR 画像が表示、右側の `(expires in ~Xm)` が推移する。HEAD で 200 を確認: `curl -sSI "$(curl -sS $API_URL/api/jobs/$JOB_ID | jq -r '.assets.script_md_url')" | head -n1`
   - Web ビルド/デプロイ（CI/CD）: `gcloud builds triggers run 'TownReady-Web-CI' --project "$GCP_PROJECT" --branch=main --substitutions _IMAGE_URI="${REGION}-docker.pkg.dev/$GCP_PROJECT/app/web:latest"` → 成功後 Cloud Run に手動/自動デプロイ
-  - Web UI/UX: `/jobs/{JOB_ID}` で「リンク再発行」「download 属性」「URLコピー」「有効期限表示（expires in ~Xm）」が機能すること。フォームから開始 → 進捗/リンク表示の一連が GUI で確認できること
+    - 注: トリガーに Service Account を設定しているため、Cloud Build 側は `options.logging: CLOUD_LOGGING_ONLY` を使用（GCS ログバケット無しで実行）。`infra/cloudbuild.web.yaml`/`infra/cloudbuild.api.yaml`/`infra/cloudbuild.worker.yaml` に反映済み。
+  - Web UI/UX: `/jobs/{JOB_ID}` で「リンク再発行」「download 属性」「URL コピー」「有効期限表示（expires in ~Xm）」が機能すること。フォームから開始 → 進捗/リンク表示の一連が GUI で確認できること
   - Gemini（設定）: `gcloud run services update townready-worker --region "$REGION" --update-env-vars GEMINI_ENABLED=true,GEMINI_MODEL=gemini-2.0-flash,VAI_LOCATION=us-central1`
   - Gemini（検証）: 新規ジョブ後に `curl -sS $API_URL/api/jobs/$JOB_ID | jq '.results.plan, .assets.script_md'`。Plan の `location` が消え、Scenario がテンプレから生成文へ変化。失敗時は Worker ログに `gemini_*_failed`、処理はフォールバックで継続
 
@@ -138,6 +139,7 @@
   - レスポンシブ: モバイル/タブレット/デスクトップで情報密度を調整（カード/アコーディオン）
   - PWA（任意）: ホームスクリーン追加/オフライン表示/基本キャッシュ
 - 実装済み (v1):
+
   - 進捗タイムライン（plan→scenario→safety→content）
   - 署名 URL の自動失効検知 → 自動再発行（60s クールダウン）/トースト通知（3s）
   - 成果ダウンロード UI（download 属性/URL コピー/QR/有効期限表示）
@@ -162,7 +164,7 @@
   - 多言語導線: シナリオ/ポスターの言語セットをユースケースで増減
   - 安全レビュー: ユースケース別ガイドラインの KB 断片を優先ヒット
 - 検証:
-  - ユースケース別の入力→生成→配布の所要時間（目標: 1 分以内に初回生成、10 分以内に一式）
+  - ユースケース別の入力 → 生成 → 配布の所要時間（目標: 1 分以内に初回生成、10 分以内に一式）
   - 成果のダウンロード完了率/エラー率/再発行率（署名 URL の運用チューニング）
   - 事後アンケート（UI 可用性/理解度/改善点）
 - CI トリガー（手動実行/ログ）:
