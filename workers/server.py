@@ -160,18 +160,36 @@ def _build_scenario(job_id: str, job_payload: Dict[str, Any], storage: Optional[
     parts = job_payload.get("participants", {})
     hazard = job_payload.get("hazard", {})
     langs: List[str] = parts.get("languages") or ["ja"]
-    title = "訓練台本"
-    script_md = (
-        f"# {title}\n\n"
-        f"- 場所: {loc.get('address','')}\n"
-        f"- 想定: {', '.join(hazard.get('types', []))}\n\n"
-        "## 手順\n"
-        "1. 集合・点呼\n"
-        "2. 初期対応（安全確認/初期消火）\n"
-        "3. 避難誘導（要配慮者を先導）\n"
-        "4. 安全確認・振り返り\n"
-    )
-    roles_csv = "role,name\nLead,田中\nSafety,佐藤\nFirstAid,鈴木\n"
+
+    def _script_for(lang: str) -> str:
+        if lang == "en":
+            return (
+                f"# Drill Script\n\n"
+                f"- Location: {loc.get('address','')}\n"
+                f"- Hazards: {', '.join(hazard.get('types', []))}\n\n"
+                "## Steps\n"
+                "1. Roll call\n"
+                "2. Initial response (safety check / fire suppression)\n"
+                "3. Evacuation guidance (assist persons with special needs)\n"
+                "4. Safety check & debrief\n"
+            )
+        # default: ja
+        return (
+            f"# 訓練台本\n\n"
+            f"- 場所: {loc.get('address','')}\n"
+            f"- 想定: {', '.join(hazard.get('types', []))}\n\n"
+            "## 手順\n"
+            "1. 集合・点呼\n"
+            "2. 初期対応（安全確認/初期消火）\n"
+            "3. 避難誘導（要配慮者を先導）\n"
+            "4. 安全確認・振り返り\n"
+        )
+
+    def _roles_for(lang: str) -> str:
+        if lang == "en":
+            return "role,name\nLead,Tanaka\nSafety,Sato\nFirstAid,Suzuki\n"
+        return "role,name\nLead,田中\nSafety,佐藤\nFirstAid,鈴木\n"
+
     routes = [
         {
             "name": "Main",
@@ -181,17 +199,45 @@ def _build_scenario(job_id: str, job_payload: Dict[str, Any], storage: Optional[
             "accessibility_notes": "段差回避、車椅子優先ルート",
         }
     ]
-    assets: Dict[str, Any] = {"script_md": script_md, "roles_csv": roles_csv, "routes": routes, "languages": langs}
+    # Base assets and per-language containers
+    assets: Dict[str, Any] = {"routes": routes, "languages": langs}
+    by_lang: Dict[str, Any] = {}
+    primary = (langs[0] if len(langs) else "ja")
     if storage:
-        script_path = f"jobs/{job_id}/script.md"
-        roles_path = f"jobs/{job_id}/roles.csv"
         routes_path = f"jobs/{job_id}/routes.json"
-        assets["script_md_uri"] = storage.upload_text(script_path, script_md, "text/markdown")
-        assets["roles_csv_uri"] = storage.upload_text(roles_path, roles_csv, "text/csv")
         assets["routes_json_uri"] = storage.upload_text(
             routes_path, json.dumps(routes, ensure_ascii=False, indent=2), "application/json"
         )
-        # Best-effort: also provide short-lived signed URLs for distribution
+    # Generate per-language script/roles
+    for lang in langs:
+        script = _script_for(lang)
+        roles = _roles_for(lang)
+        entry: Dict[str, Any] = {"lang": lang, "script_md": script, "roles_csv": roles}
+        if storage:
+            script_path = f"jobs/{job_id}/{lang}/script.md"
+            roles_path = f"jobs/{job_id}/{lang}/roles.csv"
+            entry["script_md_uri"] = storage.upload_text(script_path, script, "text/markdown")
+            entry["roles_csv_uri"] = storage.upload_text(roles_path, roles, "text/csv")
+        by_lang[lang] = entry
+        # Backward-compat: set top-level for primary language
+        if lang == primary:
+            assets.update({"script_md": script, "roles_csv": roles})
+            if storage:
+                try:
+                    from GCP_AI_Agent_hackathon.services import Settings as _Settings
+                except Exception:
+                    import sys as _sys
+                    from pathlib import Path as _Path
+                    _sys.path.append(str(_Path(__file__).resolve().parents[1]))
+                    from services import Settings as _Settings  # type: ignore
+                settings = _Settings.load()
+                try:
+                    assets["script_md_url"] = storage.signed_url(f"jobs/{job_id}/{lang}/script.md", ttl_seconds=settings.signed_url_ttl, download_name="script.md")
+                    assets["roles_csv_url"] = storage.signed_url(f"jobs/{job_id}/{lang}/roles.csv", ttl_seconds=settings.signed_url_ttl, download_name="roles.csv")
+                except Exception as e:
+                    logger.exception("signed_url_failed_scenario_primary: job=%s lang=%s err=%s", job_id, lang, e)
+    # Signed URL for routes
+    if storage:
         try:
             from GCP_AI_Agent_hackathon.services import Settings as _Settings
         except Exception:
@@ -201,12 +247,17 @@ def _build_scenario(job_id: str, job_payload: Dict[str, Any], storage: Optional[
             from services import Settings as _Settings  # type: ignore
         settings = _Settings.load()
         try:
-            # Do not force content_type for GET to maximize compatibility; set download filename
-            assets["script_md_url"] = storage.signed_url(script_path, ttl_seconds=settings.signed_url_ttl, download_name="script.md")
-            assets["roles_csv_url"] = storage.signed_url(roles_path, ttl_seconds=settings.signed_url_ttl, download_name="roles.csv")
-            assets["routes_json_url"] = storage.signed_url(routes_path, ttl_seconds=settings.signed_url_ttl, download_name="routes.json")
+            assets["routes_json_url"] = storage.signed_url(f"jobs/{job_id}/routes.json", ttl_seconds=settings.signed_url_ttl, download_name="routes.json")
+            # Signed URLs for each language entries
+            for lang, entry in by_lang.items():
+                try:
+                    entry["script_md_url"] = storage.signed_url(f"jobs/{job_id}/{lang}/script.md", ttl_seconds=settings.signed_url_ttl, download_name=f"script_{lang}.md")
+                    entry["roles_csv_url"] = storage.signed_url(f"jobs/{job_id}/{lang}/roles.csv", ttl_seconds=settings.signed_url_ttl, download_name=f"roles_{lang}.csv")
+                except Exception as e:
+                    logger.exception("signed_url_failed_scenario_lang: job=%s lang=%s err=%s", job_id, lang, e)
         except Exception as e:
-            logger.exception("signed_url_failed_scenario: path=%s error=%s", script_path, e)
+            logger.exception("signed_url_failed_scenario_routes: job=%s err=%s", job_id, e)
+    assets["by_language"] = by_lang
     return {"type": "scenario", "assets": assets}
 
 
@@ -272,7 +323,8 @@ def _build_content(job_payload: Dict[str, Any], scenario_assets: Dict[str, Any],
         {"description": "避難誘導（ルート案内）", "duration_sec": 25},
         {"description": "振り返り・注意喚起", "duration_sec": 10},
     ]
-    uris: Dict[str, str] = {}
+    uris: Dict[str, Any] = {}
+    by_lang: Dict[str, Any] = {}
     if storage:
         # Load settings for signed URL TTL and filename hints
         try:
@@ -283,25 +335,43 @@ def _build_content(job_payload: Dict[str, Any], scenario_assets: Dict[str, Any],
             _sys.path.append(str(_Path(__file__).resolve().parents[1]))
             from services import Settings as _Settings  # type: ignore
         settings = _Settings.load()
+        # Aggregate files (legacy)
         poster_path = f"jobs/{job_id}/poster_prompts.txt"
         video_prompt_path = f"jobs/{job_id}/video_prompt.txt"
         shotlist_path = f"jobs/{job_id}/video_shotlist.json"
-        uris["poster_prompts_uri"] = storage.upload_text(
-            poster_path, "\n".join(poster_prompts), "text/plain"
-        )
-        uris["video_prompt_uri"] = storage.upload_text(
-            video_prompt_path, video_prompt, "text/plain"
-        )
-        uris["video_shotlist_uri"] = storage.upload_text(
-            shotlist_path, json.dumps(shotlist, ensure_ascii=False, indent=2), "application/json"
-        )
+        uris["poster_prompts_uri"] = storage.upload_text(poster_path, "\n".join(poster_prompts), "text/plain")
+        uris["video_prompt_uri"] = storage.upload_text(video_prompt_path, video_prompt, "text/plain")
+        uris["video_shotlist_uri"] = storage.upload_text(shotlist_path, json.dumps(shotlist, ensure_ascii=False, indent=2), "application/json")
+        # Per-language files
+        for lang in langs:
+            try:
+                p_path = f"jobs/{job_id}/{lang}/poster_prompts.txt"
+                v_path = f"jobs/{job_id}/{lang}/video_prompt.txt"
+                s_path = f"jobs/{job_id}/{lang}/video_shotlist.json"
+                # Simple per-language prompts: mirror aggregate but tagged per lang
+                p_text = f"{','.join(types)} poster prompts ({lang})"
+                v_text = f"60-second drill video ({lang})"
+                by_lang.setdefault(lang, {})
+                by_lang[lang]["poster_prompts_uri"] = storage.upload_text(p_path, p_text, "text/plain")
+                by_lang[lang]["video_prompt_uri"] = storage.upload_text(v_path, v_text, "text/plain")
+                by_lang[lang]["video_shotlist_uri"] = storage.upload_text(s_path, json.dumps(shotlist, ensure_ascii=False, indent=2), "application/json")
+            except Exception as e:
+                logger.exception("content_lang_write_failed: job=%s lang=%s err=%s", job_id, lang, e)
         # Best-effort: signed URLs
         try:
             uris["poster_prompts_url"] = storage.signed_url(poster_path, ttl_seconds=settings.signed_url_ttl, download_name="poster_prompts.txt")
             uris["video_prompt_url"] = storage.signed_url(video_prompt_path, ttl_seconds=settings.signed_url_ttl, download_name="video_prompt.txt")
             uris["video_shotlist_url"] = storage.signed_url(shotlist_path, ttl_seconds=settings.signed_url_ttl, download_name="video_shotlist.json")
+            for lang in by_lang.keys():
+                try:
+                    by_lang[lang]["poster_prompts_url"] = storage.signed_url(f"jobs/{job_id}/{lang}/poster_prompts.txt", ttl_seconds=settings.signed_url_ttl, download_name=f"poster_prompts_{lang}.txt")
+                    by_lang[lang]["video_prompt_url"] = storage.signed_url(f"jobs/{job_id}/{lang}/video_prompt.txt", ttl_seconds=settings.signed_url_ttl, download_name=f"video_prompt_{lang}.txt")
+                    by_lang[lang]["video_shotlist_url"] = storage.signed_url(f"jobs/{job_id}/{lang}/video_shotlist.json", ttl_seconds=settings.signed_url_ttl, download_name=f"video_shotlist_{lang}.json")
+                except Exception as e:
+                    logger.exception("content_lang_signed_failed: job=%s lang=%s err=%s", job_id, lang, e)
         except Exception as e:
             logger.exception("signed_url_failed_content: error=%s", e)
+    uris["by_language"] = by_lang
     return {"type": "content", "poster_prompts": poster_prompts, "video_prompt": video_prompt, "video_shotlist": shotlist, **uris}
 @app.post("/pubsub/push")
 def pubsub_push(body: Dict[str, Any], authorization: Optional[str] = Header(default=None)) -> Dict[str, str]:

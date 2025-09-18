@@ -155,6 +155,39 @@ export default function JobPage(props: { params: { id: string } }) {
         )}
         {!assets.script_md_url && !assets.roles_csv_url && !assets.routes_json_url && <li>（なし）</li>}
       </ul>
+      {assets.by_language && (
+        <div>
+          <h5>Scenario assets (per language)</h5>
+          {Object.keys(assets.by_language || {}).map((lang: string) => {
+            const it = (assets.by_language as any)[lang] || {};
+            return (
+              <div key={lang} style={{ marginBottom: 8 }}>
+                <b>{lang}</b>
+                <ul>
+                  {it.script_md_url && (
+                    <li>
+                      <a target="_blank" href={it.script_md_url} download>{`script_${lang}.md`}</a>
+                      &nbsp;<small>{expiresIn(it.script_md_url)}</small>
+                      &nbsp;<button onClick={() => copy(it.script_md_url)}>コピー</button>
+                      &nbsp;<button aria-label={`${lang} script QR`} onClick={() => toggleQr(`script_${lang}`)}>QR</button>
+                      {showQr[`script_${lang}`] && <div><img alt={`script_${lang} QR`} src={qrSrc(it.script_md_url)} /></div>}
+                    </li>
+                  )}
+                  {it.roles_csv_url && (
+                    <li>
+                      <a target="_blank" href={it.roles_csv_url} download>{`roles_${lang}.csv`}</a>
+                      &nbsp;<small>{expiresIn(it.roles_csv_url)}</small>
+                      &nbsp;<button onClick={() => copy(it.roles_csv_url)}>コピー</button>
+                      &nbsp;<button aria-label={`${lang} roles QR`} onClick={() => toggleQr(`roles_${lang}`)}>QR</button>
+                      {showQr[`roles_${lang}`] && <div><img alt={`roles_${lang} QR`} src={qrSrc(it.roles_csv_url)} /></div>}
+                    </li>
+                  )}
+                </ul>
+              </div>
+            );
+          })}
+        </div>
+      )}
       <h4>Content</h4>
       <ul>
         {content.poster_prompts_url && (
@@ -186,6 +219,42 @@ export default function JobPage(props: { params: { id: string } }) {
         )}
         {!content.poster_prompts_url && !content.video_prompt_url && !content.video_shotlist_url && <li>（なし）</li>}
       </ul>
+      {content.by_language && (
+        <div>
+          <h5>Content (per language)</h5>
+          {Object.keys(content.by_language || {}).map((lang: string) => {
+            const it = (content.by_language as any)[lang] || {};
+            return (
+              <div key={lang} style={{ marginBottom: 8 }}>
+                <b>{lang}</b>
+                <ul>
+                  {it.poster_prompts_url && (
+                    <li>
+                      <a target="_blank" href={it.poster_prompts_url} download>{`poster_prompts_${lang}.txt`}</a>
+                      &nbsp;<small>{expiresIn(it.poster_prompts_url)}</small>
+                      &nbsp;<button onClick={() => copy(it.poster_prompts_url)}>コピー</button>
+                    </li>
+                  )}
+                  {it.video_prompt_url && (
+                    <li>
+                      <a target="_blank" href={it.video_prompt_url} download>{`video_prompt_${lang}.txt`}</a>
+                      &nbsp;<small>{expiresIn(it.video_prompt_url)}</small>
+                      &nbsp;<button onClick={() => copy(it.video_prompt_url)}>コピー</button>
+                    </li>
+                  )}
+                  {it.video_shotlist_url && (
+                    <li>
+                      <a target="_blank" href={it.video_shotlist_url} download>{`video_shotlist_${lang}.json`}</a>
+                      &nbsp;<small>{expiresIn(it.video_shotlist_url)}</small>
+                      &nbsp;<button onClick={() => copy(it.video_shotlist_url)}>コピー</button>
+                    </li>
+                  )}
+                </ul>
+              </div>
+            );
+          })}
+        </div>
+      )}
       <h4>Safety issues</h4>
       <ul>
         {(safety?.issues||[]).map((it: any, i: number) => (
