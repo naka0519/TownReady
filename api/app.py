@@ -526,6 +526,45 @@ def refresh_signed_urls(job_id: str) -> Dict[str, Any]:
                 except Exception:
                     pass
 
+        # Refresh nested per-language assets (scenario/content)
+        try:
+            by_lang = dict(updated_assets.get("by_language") or {})
+            for lang, entry in by_lang.items():
+                if not isinstance(entry, dict):
+                    continue
+                for src_key in ["script_md_uri", "roles_csv_uri"]:
+                    gs = entry.get(src_key)
+                    if isinstance(gs, str) and gs.startswith("gs://"):
+                        try:
+                            path = _parse_gs_path(gs)
+                            url_key = src_key.replace("_uri", "_url")
+                            download_name = path.split("/")[-1]
+                            entry[url_key] = store.signed_url(path, ttl_seconds=settings.signed_url_ttl, download_name=download_name)
+                        except Exception:
+                            pass
+            updated_assets["by_language"] = by_lang
+        except Exception:
+            pass
+
+        try:
+            content_by_lang = dict(content.get("by_language") or {})
+            for lang, entry in content_by_lang.items():
+                if not isinstance(entry, dict):
+                    continue
+                for src_key in ["poster_prompts_uri", "video_prompt_uri", "video_shotlist_uri"]:
+                    gs = entry.get(src_key)
+                    if isinstance(gs, str) and gs.startswith("gs://"):
+                        try:
+                            path = _parse_gs_path(gs)
+                            url_key = src_key.replace("_uri", "_url")
+                            download_name = path.split("/")[-1]
+                            entry[url_key] = store.signed_url(path, ttl_seconds=settings.signed_url_ttl, download_name=download_name)
+                        except Exception:
+                            pass
+            content["by_language"] = content_by_lang
+        except Exception:
+            pass
+
         import time as _t
         counters = {
             "assets_refreshed_at": int(_t.time()),
