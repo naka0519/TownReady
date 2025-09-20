@@ -27,16 +27,27 @@
 - Web UX 強化: エラー詳細表示、ダウンロード UI（download 属性/URL コピー/署名 URL の有効期限表示）を実装
 - Gemini 初期導入: Worker に Vertex AI (Gemini) を段階導入。`services/gemini_client.py` で JSON 厳密出力（response_mime_type=application/json）とフォールバックを実装。`us-central1 × gemini-2.0-flash` で Plan/Scenario 生成を確認
 
-## 2. 直近の課題・差分（Gap）
+## 2. 優先度とギャップ（IMPLEMENTATION_PLAN.md 連動）
 
-- Contract Test の CI 組み込み（生成・検証は実施済）
-- Web 最小は実装済。UX 磨き込み（エラー表示/QR/ダウンロード UI）と Web CI/CD（Cloud Build/デプロイスクリプト）が未整備
-- KPI 集計（Webhook 格納・可視化）未実装
-- アラート運用: リトライは実装済。Log-based Alert / Error Reporting の通知設計（優先度低）
-- KB 運用改善（文書拡充・スニペット表示・自動再取込）
-- Gemini 運用: モデル/リージョンの固定化（例: `us-central1 × gemini-2.0-flash`）、タイムアウト/再試行、出力スキーマ拘束の強化
-- Web UI/UX モダン化: コンポーネント設計・アクセシビリティ（キーボード操作/コントラスト/ARIA）・多言語 UI・レスポンシブ最適化・PWA（任意）
-- Web CI/CD 改良: 自動デプロイ（post-build step）/ 簡易スモーク（/api/generate/plan → /api/jobs 200）/ ステージング環境
+審査観点に合わせ、`docs/IMPLEMENTATION_PLAN.md` の優先順位 **新規性 > 解決策の有効性 > 実装品質と拡張性** を本スプリントにも適用する。
+
+### P0: 新規性ブースト（フェーズA）
+- [ ] 地域データ連携基盤: 住所 → 行政界/避難所/ハザード解決と Firestore `regions/*` キャッシュ化
+- [ ] Plan/Scenario 生成強化: ローカル/Gemini 双方で地域文脈をプロンプトに埋め込み、テンプレ依存を解消
+- [ ] ユースケースプリセット: 自治会/学校/観光地などの初期入力テンプレを UI に実装
+- [ ] 知識ベース拡充自動化: `kb/` 更新を Discovery Engine へ自動同期するスクリプト整備
+
+### P1: 解決策の有効性向上（フェーズB）
+- [ ] Scenario 出力構造化: GeoJSON 複数導線・タイムライン・資機材チェックと Markdown 整合検証
+- [ ] 高度安全レビュー: 生成物解析 + KB スコアリングで自治体チェックリスト準拠の指摘を返却
+- [ ] KPI 永続化 & ダッシュボード: Webhook 保存、Next.js ダッシュボード、再提案ロジック
+- [ ] Imagen/Veo 本生成: 生成 API 呼び出し、字幕生成、署名 URL 配布とコスト制御
+
+### P2: 実装品質と拡張性（フェーズC）
+- [ ] 信頼性改善: Pub/Sub publish 失敗ハンドリング、Firestore トランザクション、Error Reporting 連携
+- [ ] CI/CD 強化: Contract/E2E/Imagen・Veo テストの Cloud Build 自動化、Gemini ON/OFF マトリクス
+- [ ] 観測性ダッシュボード: 署名 URL 再発行・キュー遅延・失敗率の Cloud Monitoring 可視化
+- [ ] 拡張アーキテクチャ: Webhook の Cloud Tasks 化、KPI/改善提案の BigQuery/Looker Studio 輸出
 
 ## 2.1 横浜市ユースケース対応（実装・検証プラン）
 
@@ -193,6 +204,12 @@
   - 実行: `gcloud builds triggers run TownReady-CI --project "$GCP_PROJECT" --branch=main --substitutions=_API_URL="$API_URL"`
   - 一覧: `gcloud builds list --project "$GCP_PROJECT" --format='table(id,status,createTime)'`
   - ログ（Cloud Logging のみ）: `gcloud beta builds log --project "$GCP_PROJECT" --stream <BUILD_ID>`
+
+## 10. IMPLEMENTATION_PLAN.md との整合
+
+- 本スプリント計画の優先度・タスクは `docs/IMPLEMENTATION_PLAN.md` のフェーズA/B/C（P0/P1/P2）を反映している。
+- 各フェーズの担当/期日が確定したタイミングで、上記チェックリストと `IMPLEMENTATION_PLAN.md` のカンバン表を同時更新する。
+- 直近 2 週間のアクション（フェーズA-1/A-2 要件定義、プリセット設計、KB 同期 PoC）は双方のドキュメントで整合済み。
 
 ## 6. 受け入れ基準（MVP）
 

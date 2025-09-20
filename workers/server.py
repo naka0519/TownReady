@@ -18,14 +18,14 @@ except Exception:  # pragma: no cover - libs should be present via google-cloud 
     google_requests = None  # type: ignore
 
 try:
-    from GCP_AI_Agent_hackathon.services import JobsStore, Settings, Storage, Publisher
+    from GCP_AI_Agent_hackathon.services import JobsStore, Settings, Storage, Publisher, RegionContextStore
     from GCP_AI_Agent_hackathon.services.gemini_client import Gemini  # type: ignore
 except Exception:
     import sys
     from pathlib import Path
 
     sys.path.append(str(Path(__file__).resolve().parents[1]))
-    from services import JobsStore, Settings, Storage, Publisher  # type: ignore
+    from services import JobsStore, Settings, Storage, Publisher, RegionContextStore  # type: ignore
     try:
         from services.gemini_client import Gemini  # type: ignore
     except Exception:  # pragma: no cover
@@ -34,6 +34,154 @@ except Exception:
 
 app = FastAPI(title="TownReady Worker", version="0.2.0")
 logger = logging.getLogger("townready.worker")
+
+
+def _load_region_context(job_payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    try:
+        store = RegionContextStore()
+        location = job_payload.get("location") or {}
+        return store.load_for_location(location)
+    except Exception:
+        return None
+
+
+def _plan_context_summary(region_ctx: Dict[str, Any]) -> Dict[str, Any]:
+    scores = region_ctx.get("hazard_scores") or {}
+    notes: List[str] = []
+    flood = scores.get("flood_plan") or {}
+    if flood:
+        max_depth = flood.get("max_depth_m")
+        coverage = flood.get("coverage_km2")
+        note = "洪水: 最大浸水深" + (f" {max_depth}m" if max_depth is not None else " 不明")
+        if coverage:
+            note += f" / 想定面積 {coverage}km²"
+        notes.append(note)
+    landslide = scores.get("landslide") or {}
+    if landslide:
+        coverage = landslide.get("coverage_km2")
+        note = "急傾斜地崩壊: 登録区域" + (f" {coverage}km²" if coverage else " 有")
+        notes.append(note)
+    summary = {"hazard_scores": scores}
+    if notes:
+        summary["highlights"] = notes
+    return summary
+
+
+def _build_routes(loc: Dict[str, Any], context_summary: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    base_lat = loc.get("lat") or 0.0
+    base_lng = loc.get("lng") or 0.0
+
+    def _offset(lat_delta: float, lng_delta: float) -> Dict[str, float]:
+        return {"lat": round(base_lat + lat_delta, 6), "lng": round(base_lng + lng_delta, 6)}
+
+    routes: List[Dict[str, Any]] = [
+        {
+            "name": "primary",
+            "type": "main",
+            "points": [
+                {**_offset(0.0, 0.0), "label": "Start"},
+                {**_offset(0.0005, 0.0005), "label": "Assembly"},
+                {**_offset(0.001, 0.001), "label": "Shelter"},
+            ],
+            "notes": "通常導線。建物前広場を経由して避難所へ移動。",
+        },
+        {
+            "name": "accessible",
+            "type": "accessible",
+            "points": [
+                {**_offset(0.0, 0.0), "label": "Start"},
+                {**_offset(0.0004, -0.0003), "label": "Ramp"},
+                {**_offset(0.0009, -0.0001), "label": "Shelter"},
+            ],
+            "notes": "スロープを利用したバリアフリー導線。介助者2名を割当。",
+        },
+    ]
+
+    hazard_scores = (context_summary or {}).get("hazard_scores", {})
+    if hazard_scores.get("flood_plan"):
+        routes.append(
+            {
+                "name": "alternate_high_ground",
+                "type": "alternate",
+                "points": [
+                    {**_offset(0.0, 0.0), "label": "Start"},
+                    {**_offset(-0.0006, 0.0004), "label": "Elevated Path"},
+                    {**_offset(-0.0012, 0.0008), "label": "Secondary Shelter"},
+                ],
+                "notes": "浸水リスク回避の高台ルート。夜間灯りの確認が必要。",
+            }
+        )
+    return routes
+
+
+def _build_timeline(context_summary: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    timeline = [
+        {"step": "集合・点呼", "timestamp_offset_sec": 0, "description": "集合場所でグループ分けと人数確認"},
+        {"step": "初期対応", "timestamp_offset_sec": 180, "description": "負傷者確認と初期消火・救護班の展開"},
+        {"step": "避難開始", "timestamp_offset_sec": 360, "description": "メイン導線で避難開始。車椅子/要配慮者は先行"},
+        {"step": "避難所到着", "timestamp_offset_sec": 780, "description": "受付で名簿照合。医療班が体調チェック"},
+        {"step": "振り返り", "timestamp_offset_sec": 1200, "description": "ハイライト共有と改善点の洗い出し"},
+    ]
+
+    hazard_scores = (context_summary or {}).get("hazard_scores", {})
+    if hazard_scores.get("flood_plan"):
+        timeline.insert(
+            3,
+            {
+                "step": "浸水箇所確認",
+                "timestamp_offset_sec": 480,
+                "description": "浸水想定エリアのバリケード設置と誘導員配置を確認",
+            },
+        )
+    if hazard_scores.get("landslide"):
+        timeline.insert(
+            3,
+            {
+                "step": "急傾斜地確認",
+                "timestamp_offset_sec": 420,
+                "description": "土砂崩れ警戒区域の見回りと通行禁止ゾーンの設定",
+            },
+        )
+    return timeline
+
+
+def _build_resource_checklist(context_summary: Optional[Dict[str, Any]]) -> List[str]:
+    checklist = [
+        "誘導用ベスト/ライト (10 セット)",
+        "救護セット (AED / 応急キット)",
+        "多言語アナウンス資料 (日英)",
+    ]
+    hazard_scores = (context_summary or {}).get("hazard_scores", {})
+    if hazard_scores.get("flood_plan"):
+        checklist.append("止水板・吸水土嚢・ポンプの点検")
+    if hazard_scores.get("landslide"):
+        checklist.append("土砂崩れ警戒区域のバリケードとメガホン")
+    return checklist
+
+
+def _augment_scenario_assets(
+    assets: Dict[str, Any],
+    job_payload: Dict[str, Any],
+    context_summary: Optional[Dict[str, Any]],
+) -> None:
+    loc = job_payload.get("location", {})
+    routes = _build_routes(loc, context_summary)
+    if not assets.get("routes"):
+        assets["routes"] = routes
+    elif context_summary and context_summary.get("hazard_scores", {}).get("flood_plan"):
+        # Ensure alternate route is present when flood risk exists
+        existing_names = {r.get("name") for r in assets.get("routes", []) if isinstance(r, dict)}
+        for route in routes:
+            if route.get("name") == "alternate_high_ground" and route.get("name") not in existing_names:
+                assets.setdefault("routes", []).append(route)
+
+    timeline = _build_timeline(context_summary)
+    if not assets.get("timeline"):
+        assets["timeline"] = timeline
+
+    checklist = _build_resource_checklist(context_summary)
+    if not assets.get("resource_checklist"):
+        assets["resource_checklist"] = checklist
 
 
 @app.get("/")
@@ -79,7 +227,10 @@ def _verify_push(authorization: Optional[str]) -> bool:
         return False
 
 
-def _build_plan(job_payload: Dict[str, Any]) -> Dict[str, Any]:
+def _build_plan(
+    job_payload: Dict[str, Any],
+    context_summary: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     # Optional Gemini generation (staged via env)
     try:
         settings = Settings.load()
@@ -90,7 +241,10 @@ def _build_plan(job_payload: Dict[str, Any]) -> Dict[str, Any]:
             scenarios = raw.get("scenarios") or []
             acceptance = raw.get("acceptance") or {}
             handoff = raw.get("handoff") or {"to": "Scenario Agent", "with": {}}
-            return {"scenarios": scenarios, "acceptance": acceptance, "handoff": handoff}
+            plan = {"scenarios": scenarios, "acceptance": acceptance, "handoff": handoff}
+            if context_summary:
+                plan["context"] = context_summary
+            return plan
     except Exception as e:
         logger.exception("gemini_plan_failed: %s", e)
     loc = job_payload.get("location", {})
@@ -116,16 +270,34 @@ def _build_plan(job_payload: Dict[str, Any]) -> Dict[str, Any]:
         "targets": {"attendance_rate": 0.6, "avg_evac_time_sec": 300, "quiz_score": 0.7},
         "collection": ["checkin", "route_time", "post_quiz"],
     }
-    acceptance = {"must_include": ["要配慮者ルート", "多言語掲示", "役割表CSV"], "kpi_plan": kpi}
-    return {
+    acceptance_list = ["要配慮者ルート", "多言語掲示", "役割表CSV"]
+    hazard_scores: Dict[str, Any] = {}
+    if context_summary:
+        hazard_scores = context_summary.get("hazard_scores", {})
+        flood = hazard_scores.get("flood_plan")
+        if flood:
+            acceptance_list.append("洪水想定エリアでの避難動線確認")
+        landslide = hazard_scores.get("landslide")
+        if landslide:
+            acceptance_list.append("急傾斜地付近での安全導線点検")
+    acceptance = {"must_include": acceptance_list, "kpi_plan": kpi}
+    plan = {
         "scenarios": scenarios,
         "acceptance": acceptance,
         "handoff": {"to": "Scenario Agent", "with": {"scenario_id": scenarios[0]["id"]}},
         "location": {"address": loc.get("address"), "lat": loc.get("lat"), "lng": loc.get("lng")},
     }
+    if context_summary:
+        plan["context"] = context_summary
+    return plan
 
 
-def _build_scenario(job_id: str, job_payload: Dict[str, Any], storage: Optional[Storage]) -> Dict[str, Any]:
+def _build_scenario(
+    job_id: str,
+    job_payload: Dict[str, Any],
+    storage: Optional[Storage],
+    context_summary: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     # Optional Gemini generation (staged via env)
     try:
         settings = Settings.load()
@@ -139,6 +311,11 @@ def _build_scenario(job_id: str, job_payload: Dict[str, Any], storage: Optional[
             routes = assets_in.get("routes") or []
             langs = assets_in.get("languages") or (job_payload.get("participants", {}).get("languages") or ["ja"])
             assets: Dict[str, Any] = {"script_md": script_md, "roles_csv": roles_csv, "routes": routes, "languages": langs}
+            if context_summary:
+                assets["context"] = context_summary
+            assets.setdefault("timeline", _build_timeline(context_summary))
+            assets.setdefault("resource_checklist", _build_resource_checklist(context_summary))
+            _augment_scenario_assets(assets, job_payload, context_summary)
             if storage:
                 script_path = f"jobs/{job_id}/script.md"
                 roles_path = f"jobs/{job_id}/roles.csv"
@@ -161,6 +338,14 @@ def _build_scenario(job_id: str, job_payload: Dict[str, Any], storage: Optional[
     hazard = job_payload.get("hazard", {})
     langs: List[str] = parts.get("languages") or ["ja"]
 
+    highlights: List[str] = []
+    if context_summary:
+        highlights = context_summary.get("highlights", [])
+
+    routes = _build_routes(loc, context_summary)
+    timeline = _build_timeline(context_summary)
+    resource_checklist = _build_resource_checklist(context_summary)
+
     def _script_for(lang: str) -> str:
         if lang == "en":
             return (
@@ -172,6 +357,11 @@ def _build_scenario(job_id: str, job_payload: Dict[str, Any], storage: Optional[
                 "2. Initial response (safety check / fire suppression)\n"
                 "3. Evacuation guidance (assist persons with special needs)\n"
                 "4. Safety check & debrief\n"
+                + (
+                    "\n## Local Risk Highlights\n" + "\n".join(f"- {note}" for note in highlights)
+                    if highlights
+                    else ""
+                )
             )
         # default: ja
         return (
@@ -183,6 +373,11 @@ def _build_scenario(job_id: str, job_payload: Dict[str, Any], storage: Optional[
             "2. 初期対応（安全確認/初期消火）\n"
             "3. 避難誘導（要配慮者を先導）\n"
             "4. 安全確認・振り返り\n"
+            + (
+                "\n## 地域特有の注意\n" + "\n".join(f"- {note}" for note in highlights)
+                if highlights
+                else ""
+            )
         )
 
     def _roles_for(lang: str) -> str:
@@ -190,17 +385,15 @@ def _build_scenario(job_id: str, job_payload: Dict[str, Any], storage: Optional[
             return "role,name\nLead,Tanaka\nSafety,Sato\nFirstAid,Suzuki\n"
         return "role,name\nLead,田中\nSafety,佐藤\nFirstAid,鈴木\n"
 
-    routes = [
-        {
-            "name": "Main",
-            "points": [
-                {"lat": loc.get("lat"), "lng": loc.get("lng"), "label": "Start"},
-            ],
-            "accessibility_notes": "段差回避、車椅子優先ルート",
-        }
-    ]
     # Base assets and per-language containers
-    assets: Dict[str, Any] = {"routes": routes, "languages": langs}
+    assets: Dict[str, Any] = {
+        "routes": routes,
+        "languages": langs,
+        "timeline": timeline,
+        "resource_checklist": resource_checklist,
+    }
+    if context_summary:
+        assets["context"] = context_summary
     by_lang: Dict[str, Any] = {}
     primary = (langs[0] if len(langs) else "ja")
     if storage:
@@ -432,11 +625,15 @@ def pubsub_push(body: Dict[str, Any], authorization: Optional[str] = Header(defa
             attempts_map = {}
         cur_attempt = int(attempts_map.get(task, 0))
 
+        region_ctx = _load_region_context(job_payload)
+        context_summary = _plan_context_summary(region_ctx) if region_ctx else None
+
         # Route by task and build outputs
         if task == "plan":
-            result = {"type": "plan", **_build_plan(job_payload)}
+            plan_payload = _build_plan(job_payload, context_summary)
+            result = {"type": "plan", **plan_payload}
         elif task == "scenario":
-            result = _build_scenario(job_id, job_payload, storage)
+            result = _build_scenario(job_id, job_payload, storage, context_summary)
         elif task == "safety":
             scenario_assets = (job_doc.get("assets") or {}) or ((job_doc.get("result") or {}).get("assets") or {})
             result = _build_safety(job_payload, scenario_assets)

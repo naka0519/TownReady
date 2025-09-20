@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 from enum import Enum
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field, HttpUrl
 
@@ -103,3 +103,34 @@ class GenerateBaseRequest(BaseModel):
     constraints: Optional[Constraints] = None
     kb_refs: List[str] = Field(default_factory=list)
 
+
+class LatLng(BaseModel):
+    lat: float = Field(..., ge=-90, le=90)
+    lng: float = Field(..., ge=-180, le=180)
+
+
+class ShelterPoint(BaseModel):
+    id: Optional[str] = None
+    name: Optional[str] = None
+    location: LatLng
+
+
+class HazardBand(BaseModel):
+    depth_label: str
+    depth_min_m: Optional[float] = None
+    depth_max_m: Optional[float] = None
+    geometry: Dict[str, Any]
+
+
+class RegionInfo(BaseModel):
+    prefecture: str
+    city: str
+    ward: Optional[str] = None
+
+
+class RegionContext(BaseModel):
+    region: RegionInfo
+    hazards: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
+    hazard_scores: Dict[str, Dict[str, float]] = Field(default_factory=dict)
+    shelters: List[ShelterPoint] = Field(default_factory=list)
+    meta: Optional[Dict[str, Any]] = None
