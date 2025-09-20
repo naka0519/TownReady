@@ -1,2 +1,5 @@
 venv/
 tmp/
+output/
+kb/*.geojson
+kb/region_context/*.json

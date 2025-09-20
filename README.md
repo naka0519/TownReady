@@ -335,12 +335,6 @@ Push 配信（Pub/Sub → Worker）は Cloud Run URL の `/pubsub/push`（POST�
 
 ---
 
-## ライセンス
-
-- 仮: Apache-2.0（検討中）
-
----
-
 ## 開発ロードマップ（MVP → α）
 
 1. Schema & Contract / JSON 出力強制
@@ -406,7 +400,6 @@ Push 配信（Pub/Sub → Worker）は Cloud Run URL の `/pubsub/push`（POST�
 ### 6.4 Content（patched→ContentPackage）
 
 - ポスター（A4, 言語別, 注意書き）
-- 60 秒 VTR（字幕日英、ショットリストに沿う）
 - script.md / roles.csv / geojson のエクスポート
 
 #### 6.x JSON 例
