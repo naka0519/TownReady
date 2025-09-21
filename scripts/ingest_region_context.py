@@ -1,26 +1,25 @@
 #!/usr/bin/env python3
-"""RegionContext ingestion prototype for Yokohama-shi Totsuka-ku.
+"""RegionContext ingestion tool.
 
-Features:
-- Clips tsunami浸水想定と急傾斜地崩壊（landslide）を行政界でフィルタ
-  (`kb/gyouseiku.geojson` を使用)
-- ジオメトリを簡易 Simplify（座標丸め＋ほぼ重複点の除外）
-- 避難所は座標＋ID/名称のみ抽出（Totsuka 区内判定）
-- ハザードごとの集約指標 (`hazard_scores`) を計算し JSON に出力
+既存の戸塚区向けプロトタイプを一般化し、複数地域の RegionContext JSON と
+カタログ index.json を生成するためのユーティリティ。CI から実行しても
+差分が安定するよう、出力はソート済み/丸め済みのフィールドのみを含む。
 """
 from __future__ import annotations
 
+import argparse
 import json
-from pathlib import Path
-from typing import Any, Dict, Iterable, List, Sequence, Tuple, Optional
 from math import cos, radians
+import sys
+from pathlib import Path
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+import unicodedata
 
 TSUNAMI_GEOJSON = Path("kb/tunami.geojson")
 SHELTER_GEOJSON = Path("kb/shelter.geojson")
 ADMIN_GEOJSON = Path("kb/gyouseiku.geojson")
 LANDSLIDE_GEOJSON = Path("kb/hazardarea.geojson")
 FLOOD_GEOJSON = Path("kb/flood.geojson")
-OUTPUT_PATH = Path("kb/region_context/totsuka.json")
 
 DEPTH_TOKENS = ["以上", "未満", "〜", "m"]
 EARTH_RADIUS_M = 6378137.0
@@ -37,6 +36,148 @@ FLOOD_DEPTH_RANGES: Dict[int, Tuple[Optional[float], Optional[float]]] = {
 
 
 # --------------------------------------------------------------------------- utils
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Build RegionContext JSON and index entry.")
+    parser.add_argument("--prefecture", default="神奈川県")
+    parser.add_argument("--city", default="横浜市")
+    parser.add_argument("--ward", default="戸塚区")
+    parser.add_argument("--municipal-code", dest="municipal_code", default="14110")
+    parser.add_argument("--slug", help="ASCII slug for output file (default: derived from municipal code)")
+    parser.add_argument(
+        "--output-dir",
+        default="kb/region_context",
+        help="Directory to store generated RegionContext files",
+    )
+    parser.add_argument(
+        "--index",
+        default=None,
+        help="Path to catalog index.json (default: <output-dir>/index.json)",
+    )
+    parser.add_argument(
+        "--no-index",
+        action="store_true",
+        help="Do not update the catalog index file",
+    )
+    parser.add_argument(
+        "--check-only",
+        action="store_true",
+        help="Skip file writes and only report derived metadata",
+    )
+    return parser.parse_args()
+
+
+def _ascii_token(text: str) -> str:
+    normalized = unicodedata.normalize("NFKD", text)
+    ascii_token = "".join(
+        ch for ch in normalized if ch.isalnum() and ord(ch) < 128
+    ).lower()
+    if ascii_token:
+        return ascii_token
+    return ""
+
+
+def derive_slug(args: argparse.Namespace) -> str:
+    candidates = [args.prefecture, args.city, getattr(args, "ward", None)]
+    tokens = [
+        _ascii_token(item)
+        for item in candidates
+        if isinstance(item, str) and item.strip()
+    ]
+    slug = "-".join(token for token in tokens if token)
+    if not slug:
+        code = getattr(args, "municipal_code", "")
+        if code:
+            slug = f"region-{code}"
+    if not slug:
+        slug = "region"
+    return slug
+
+
+def compute_bbox_and_centroid(context: Dict[str, Any]) -> Tuple[Optional[Tuple[float, float, float, float]], Optional[Tuple[float, float]]]:
+    coords: List[Tuple[float, float]] = []
+
+    def collect_geom(geom: Dict[str, Any]) -> None:
+        gtype = geom.get("type")
+        raw = geom.get("coordinates", [])
+        if gtype == "Polygon":
+            rings = raw
+        elif gtype == "MultiPolygon":
+            rings = [ring for poly in raw for ring in poly]
+        else:
+            return
+        for ring in rings:
+            for pt in ring:
+                if isinstance(pt, (list, tuple)) and len(pt) >= 2:
+                    try:
+                        lng = float(pt[0])
+                        lat = float(pt[1])
+                        coords.append((lng, lat))
+                    except Exception:
+                        continue
+
+    for hazard in (context.get("hazards") or {}).values():
+        for feat in hazard.get("features", []):
+            geom = feat.get("geometry")
+            if isinstance(geom, dict):
+                collect_geom(geom)
+
+    for shelter in context.get("shelters", []):
+        loc = shelter.get("location") or {}
+        try:
+            coords.append((float(loc["lng"]), float(loc["lat"])))
+        except Exception:
+            continue
+
+    if not coords:
+        return None, None
+
+    min_lng = min(pt[0] for pt in coords)
+    min_lat = min(pt[1] for pt in coords)
+    max_lng = max(pt[0] for pt in coords)
+    max_lat = max(pt[1] for pt in coords)
+    centroid = ((max_lng + min_lng) / 2.0, (max_lat + min_lat) / 2.0)
+    return (min_lng, min_lat, max_lng, max_lat), centroid
+
+
+def update_index(
+    index_path: Path,
+    *,
+    entry: Dict[str, Any],
+) -> None:
+    if index_path.exists():
+        try:
+            content = json.loads(index_path.read_text(encoding="utf-8"))
+        except Exception:
+            content = {"regions": []}
+    else:
+        content = {"regions": []}
+
+    regions = content.get("regions")
+    if not isinstance(regions, list):
+        regions = []
+        content["regions"] = regions
+
+    def _same(existing: Dict[str, Any]) -> bool:
+        if entry.get("id") and existing.get("id") == entry.get("id"):
+            return True
+        if existing.get("path") == entry.get("path"):
+            return True
+        return False
+
+    updated = False
+    for idx, existing in enumerate(list(regions)):
+        if isinstance(existing, dict) and _same(existing):
+            regions[idx] = entry
+            updated = True
+            break
+
+    if not updated:
+        regions.append(entry)
+
+    regions.sort(key=lambda item: (item.get("id") or item.get("path") or ""))
+    index_path.write_text(json.dumps(content, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 def _bbox_of_coords(coords: Iterable[Iterable[Tuple[float, float]]]) -> Tuple[float, float, float, float]:
     minx = miny = float("inf")
@@ -82,13 +223,22 @@ def _parse_depth_band(label: str) -> Dict[str, float | None | str]:
     return result
 
 
-def _build_admin_polygons() -> Tuple[List[Dict[str, Sequence[Tuple[float, float]]]], Tuple[float, float, float, float]]:
+def _build_admin_polygons(
+    prefecture: str,
+    city: str,
+    ward: Optional[str],
+) -> Tuple[List[Dict[str, Sequence[Tuple[float, float]]]], Tuple[float, float, float, float]]:
     data = json.loads(ADMIN_GEOJSON.read_text(encoding="utf-8"))
     polys: List[Dict[str, Sequence[Tuple[float, float]]]] = []
     bbox = [float("inf"), float("inf"), float("-inf"), float("-inf")]
     for feat in data.get("features", []):
         props = feat.get("properties", {})
-        if props.get("N03_003") != "横浜市" or props.get("N03_004") != "戸塚区":
+        if props.get("N03_001") and prefecture and props.get("N03_001") != prefecture:
+            continue
+        if props.get("N03_003") and city and props.get("N03_003") != city:
+            continue
+        ward_prop = props.get("N03_004")
+        if ward and ward_prop and ward_prop != ward:
             continue
         geom = feat.get("geometry") or {}
         gtype = geom.get("type")
@@ -404,15 +554,25 @@ def compute_hazard_scores(tsunami: List[Dict[str, Any]], landslide: List[Dict[st
 
 
 def main() -> None:
-    polygons, admin_bbox = _build_admin_polygons()
+    args = parse_args()
+    try:
+        polygons, admin_bbox = _build_admin_polygons(args.prefecture, args.city, getattr(args, "ward", None))
+    except RuntimeError as exc:  # pragma: no cover
+        print(f"[ERROR] {exc}", file=sys.stderr)
+        raise SystemExit(1)
+
     tsunami = load_tsunami_features(polygons, admin_bbox)
     shelters = load_shelter_points(polygons, admin_bbox)
     landslide = load_landslide_features(polygons, admin_bbox)
     flood = load_flood_features(polygons, admin_bbox)
     hazard_scores = compute_hazard_scores(tsunami, landslide, flood)
-    OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
+
     payload = {
-        "region": {"prefecture": "神奈川県", "city": "横浜市", "ward": "戸塚区"},
+        "region": {
+            "prefecture": args.prefecture,
+            "city": args.city,
+            "ward": getattr(args, "ward", None),
+        },
         "hazards": {
             "tsunami": {
                 "crs": "EPSG:4326 (converted from EPSG:6668)",
@@ -441,16 +601,61 @@ def main() -> None:
             "notes": "Centroid-based clip; consider polygon intersection for higher fidelity.",
         },
     }
-    OUTPUT_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(
-        "Wrote {path} (tsunami={tsunami_count}, landslide={landslide_count}, flood={flood_count}, shelters={shelter_count})".format(
-            path=OUTPUT_PATH,
-            tsunami_count=len(tsunami),
-            landslide_count=len(landslide),
-            flood_count=len(flood),
-            shelter_count=len(shelters),
+
+    slug = args.slug or derive_slug(args)
+    out_dir = Path(args.output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    output_path = (out_dir / f"{slug}.json").resolve()
+
+    if not args.check_only:
+        output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(
+            "Wrote {path} (tsunami={tsunami_count}, landslide={landslide_count}, flood={flood_count}, shelters={shelter_count})".format(
+                path=output_path,
+                tsunami_count=len(tsunami),
+                landslide_count=len(landslide),
+                flood_count=len(flood),
+                shelter_count=len(shelters),
+            )
         )
-    )
+
+    bbox, centroid = compute_bbox_and_centroid(payload)
+    if not args.no_index and not args.check_only:
+        index_path = Path(args.index) if args.index else (out_dir / "index.json")
+        try:
+            rel_path = output_path.relative_to(out_dir)
+            rel_str = str(rel_path)
+        except ValueError:
+            rel_str = output_path.name
+
+        entry: Dict[str, Any] = {
+            "id": f"region-{args.municipal_code}" if getattr(args, "municipal_code", None) else None,
+            "slug": slug,
+            "path": rel_str,
+            "preferred_names": [
+                item
+                for item in [args.prefecture, args.city, getattr(args, "ward", None)]
+                if item
+            ],
+            "keywords": [item for item in [args.city, getattr(args, "ward", None)] if item],
+            "hazards": sorted(list(payload.get("hazards", {}).keys())),
+            "municipal_code": getattr(args, "municipal_code", None) or None,
+        }
+        if bbox:
+            entry["bbox"] = [round(val, 6) for val in bbox]
+        if centroid:
+            entry["centroid"] = [round(val, 6) for val in centroid]
+        entry = {k: v for k, v in entry.items() if v not in (None, [], {})}
+        update_index(index_path, entry=entry)
+        print(f"Updated {index_path} with entry {entry.get('id') or entry.get('slug')}")
+
+    if args.check_only:
+        print(json.dumps({"slug": slug, "hazard_counts": {
+            "tsunami": len(tsunami),
+            "landslide": len(landslide),
+            "flood": len(flood),
+            "shelters": len(shelters),
+        }}, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":

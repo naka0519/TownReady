@@ -96,6 +96,7 @@ class Gemini:
         loc = payload.get("location", {})
         parts = payload.get("participants", {})
         hazard = payload.get("hazard", {})
+        region_ctx = payload.get("region_context") or {}
         languages = parts.get("languages") or ["ja"]
         prompt = f"""
 You are an incident drill planner. Create a JSON object describing a localized PlanSpec.
@@ -111,6 +112,7 @@ Inputs:
   Location: {json.dumps(loc, ensure_ascii=False)}
   Participants: {json.dumps(parts, ensure_ascii=False)}
   Hazards: {json.dumps(hazard, ensure_ascii=False)}
+  RegionContext: {json.dumps(region_ctx, ensure_ascii=False)}
 
 Output MUST be valid JSON matching the schema above. Do not include extra keys. Escape newlines as \\n.
 """
@@ -130,6 +132,7 @@ Output MUST be valid JSON matching the schema above. Do not include extra keys. 
         loc = payload.get("location", {})
         hazard = payload.get("hazard", {})
         parts = payload.get("participants", {})
+        region_ctx = payload.get("region_context") or {}
         langs = parts.get("languages") or ["ja"]
         prompt = f"""
 Generate scenario assets tailored to the inputs.
@@ -137,6 +140,7 @@ Inputs:
   Location: {json.dumps(loc, ensure_ascii=False)}
   Hazards: {json.dumps(hazard, ensure_ascii=False)}
   Participants: {json.dumps(parts, ensure_ascii=False)}
+  RegionContext: {json.dumps(region_ctx, ensure_ascii=False)}
 You MUST return JSON of the form {{ "assets": {{ ... }} }} including:
   script_md: markdown string with sections `## Steps` and `## Local Risk Highlights` (or Japanese equivalent) reflecting hazard details.
   roles_csv: CSV string with headers role,name,responsibility and entries for lead/marshal/assistants.

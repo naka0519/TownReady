@@ -29,7 +29,7 @@ class Storage:
 
     def upload_text(self, path: str, content: str, content_type: str = "text/plain") -> str:
         blob = self.bucket.blob(path)
-        blob.upload_from_string(content, content_type=content_type)
+        blob.upload_from_string(content.encode("utf-8"), content_type=content_type)
         return f"gs://{self.bucket.name}/{path}"
 
     def upload_bytes(self, path: str, data: bytes, content_type: Optional[str] = None) -> str:

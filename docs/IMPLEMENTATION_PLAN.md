@@ -15,10 +15,12 @@
 | 実装品質と拡張性 (P2) | 安定運用・自動テスト・監視が整備される | E2E パイプライン成功率 95% / 主要機能のCIカバレッジ 80% |
 
 ## 3. フェーズ別ロードマップ
-- [ ] **地域データ連携基盤**: RegionContext の多地域化と GCS 自動同期、サイズ最適化、テスト整備を完了させる。
-- [ ] **Plan/Scenario 生成強化**: Gemini プロンプトの精緻化とフォールバック改善（生成段階でハザードハイライト・複線ルート・タイムライン等を返すよう修正）。
-- [ ] **ユースケースプリセット**: 自治会・学校・観光地などのテンプレ入力を UI に追加し、ジョブ起動時に適用。
-- [ ] **知識ベース拡充自動化**: `kb/` 配下の更新を Discovery Engine に自動反映する同期スクリプトを整備。
+- [ ] **P0: 地域文脈の本格導入** — RegionContext の多地域化と GCS 自動同期、欠損フォールバック、キャッシュ整合テストを完了させ、Plan/Scenario/Safety 全段で地域ハザード差分が必ず出力に反映されるようにする。
+- [ ] **P0: ユースケースプリセット×UI** — 自治会/学校/商業施設など公開データと KPI テンプレを紐付け、UI・プロンプトから即座にシナリオ差分が提示されるよう拡張する。
+- [ ] **P1: コンテンツ生成の実用化** — Imagen/Veo 本生成呼び出しと署名 URL 配布、字幕生成、コスト制御をワークフローに統合し、実際のポスター/動画を提供する。
+- [ ] **P1: KPI 永続化と改善ループ** — Webhook 受信データを Firestore/BigQuery に保存し、Next.js ダッシュボードと再提案ロジックで JTBD の改善ループを成立させる。
+- [ ] **P1: 安全レビュー高度化** — 自治体チェックリスト JSON との突合、静的解析、KB スコアリングを組み合わせた指摘エンジンを構築する。
+- [ ] **P2: 信頼性と観測性** — API の publish 失敗検知/リトライ、Webhook スキーマ検証、CI/監視整備で運用品質を高める。
 
 ### フェーズB: 解決策の有効性向上 (P1)
 - [~] **Scenario 出力の構造化**: GeoJSON に複数導線・タイムライン・資機材チェックを付与し、Markdown と整合性検証を追加。（成果物反映済み。テスト・多地域展開は A-1/A-2 と連携して継続）
@@ -54,9 +56,9 @@
 - 依存関係変更や設計変更は本ドキュメントに反映し、レビュアと共有する。
 
 ## 6. 次アクション 
-1. フェーズA-1/A-2 の要件定義と技術調査を完了し、データ入手経路・スキーマ・API 契約を確定する。
-2. ユースケースプリセットの UI 仕様を決定し、Next.js フォームへの組み込み設計を作成する。
-3. KB 同期自動化の PoC (GCS → Discovery Engine) を scripts/ または infra/ 配下で実装し、手順書を追加する。
+1. RegionContext の自動同期（GCS/Firestore）と欠損フォールバック、E2E テストを整備し、地域ハザード差分が常に反映されることを検証する。
+2. 自治会/学校/商業施設プリセットを公開データと紐付け、Next.js フォームとプロンプトに組み込んで KPI/導線差分を即時提示できるようにする。
+3. Imagen/Veo 生成ワークフローとコスト制御を Worker に実装し、Webhook → Firestore/BigQuery 永続化＋ダッシュボード連携で改善ループを構築する。
 
 ## 7. フェーズA 要件調査ログ
 
@@ -86,10 +88,14 @@
 
 #### A-1 進捗（プロトタイプ）
 - `scripts/ingest_region_context.py` を更新し、行政界 (`kb/gyouseiku.geojson`) を読み込んで戸塚区ポリゴンを抽出。津波浸水想定 (`kb/tunami.geojson`) と急傾斜地崩壊 (`kb/hazardarea.geojson`) を行政界バウンダリとセントロイド内判定でクリップし、座標を丸めて簡易 simplify。
-- 出力サンプル `kb/region_context/totsuka.json` を生成（津波ポリゴン 0 件、急傾斜 30 件、洪水 1,874 件、避難所 36 件）。津波ハザードが 0 件となるため、将来的には polygon intersection を導入して周辺地域も評価できるよう改善予定。
+- 出力サンプル `kb/region_context/region-14110.json` を生成（津波ポリゴン 0 件、急傾斜 30 件、洪水 1,874 件、避難所 36 件）。津波ハザードが 0 件となるため、将来的には polygon intersection を導入して周辺地域も評価できるよう改善予定。
 - 避難所は座標＋名称/id のみに限定し、追加属性は別マスタ管理とする方針を確認済み。
 - `hazard_scores` を集計（feature 件数・カバレッジ km2・最大浸水深・トップハザード種別/ランク件数）し、RegionContext JSON に含める仕組みを整備。
 - Cloud Run Worker が GCS (`REGION_CONTEXT_DIR`) から地域コンテキストを取得し、Plan/Scenario に flood / landslide サマリ・ハイライトが反映されることを本番相当環境で検証済み。
+- `scripts/ingest_region_context.py` を CLI 化し、`--municipal-code` から `region-<code>.json` を自動生成。`index.json` の更新と slug 生成を一括化。
+- `kb/region_context/index.json` を整備し、RegionContextStore が catalog 参照で多地域へスケールできるようにした（`derive_key` で job への格納可）。
+- `tests/test_region_context_store.py` で catalog 解決を検証し、CI 向けに `scripts/payloads/*.json` を追加して schema バリデーションを並列化。
+- `services/storage_client.upload_text` で UTF-8 エンコードを強制し、Worker の成果物（script.md / roles.csv / routes.json）を日本語で生成するよう統一。roles.csv は BOM 付き UTF-8 に揃え、日本語の文字化けを解消。
 - **残タスク (A-1)**
   - 行政界クリップをセントロイド判定から厳密な polygon intersection へ置き換え。
   - 津波以外のハザード（高潮・J-SHIS 地震動など）を追加取り込みし `hazard_scores` を拡充。
@@ -109,6 +115,7 @@
   - 参加者属性（車椅子/子ども/言語）×施設用途ごとに推奨 KPI・タイムラインを可変化。
   - Scenario 出力に `routes` 複数系（メイン/バリアフリー/代替）、各ステップの `timestamp_offset_sec`、`resource_checklist` を追加。
   - Gemini 有効時はプロンプトに JSON スキーマと地域サマリを付与。無効時フォールバックでも同等構造を組み立て。
+- **進捗**: Fallback/Genimi 双方でハザード別 KPI・導線・資機材リストを日本語生成するよう更新し、台本 (`script.md`) と役割表 (`roles.csv`) の日本語化・UTF-8 対応を完了。`tests/test_plan_scenario.py` で多災害ケースを網羅。
 - **API/スキーマ変更案**
   - `schemas/models.py` に `RegionContext`, `ScenarioStep`, `ResourceItem` を追加。
   - `GenerateBaseRequest` に `context_ref` or `region_context` を追加し、後方互換のため optional にする。
@@ -125,3 +132,7 @@
 - RegionContext からのハザードサマリを Plan の `acceptance.must_include` に反映し、Scenario では `timeline`・`resource_checklist`・`alternate` ルートを自動生成するよう実装。Gemini 経由の出力にも後処理で強制適用。
 - Markdown 台本へ `Local Risk Highlights` / `地域特有の注意` を挿入し、洪水・急傾斜ハイライトを成果物に反映。成果物 (`output/script.md` 等) で確認済み。
 - flood / landslide ハイライトが実環境で確認済み。残課題（行政界 intersection / 追加ハザード）は A-1 と連携して継続。
+- **残タスク (A-2)**
+  - RegionContext のキャッシュ欠損時にフォールバック台本へ地域差分を乗せるロジックとテストを追加。
+  - プリセット別 KPI/導線テンプレを UI とプロンプトに統合し、Plan/Scenario の差別化を高める。
+  - 生成物の差分テスト（JSON Schema＋サンプル住所）を CI へ組み込み、Gemini 有効/無効の両系統をカバーする。
