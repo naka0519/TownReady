@@ -15,14 +15,13 @@
 | 実装品質と拡張性 (P2) | 安定運用・自動テスト・監視が整備される | E2E パイプライン成功率 95% / 主要機能のCIカバレッジ 80% |
 
 ## 3. フェーズ別ロードマップ
-### フェーズA: 新規性ブースト (P0)
-- [ ] **地域データ連携基盤**: 住所から行政界・避難所・ハザードを解決する ETL と Firestore `regions/*` キャッシュを実装。
-- [ ] **Plan/Scenario 生成強化**: Gemini およびローカルフォールバック双方で地域文脈をプロンプト/ロジックに組み込み、定型テンプレを廃止。
+- [ ] **地域データ連携基盤**: RegionContext の多地域化と GCS 自動同期、サイズ最適化、テスト整備を完了させる。
+- [ ] **Plan/Scenario 生成強化**: Gemini プロンプトの精緻化とフォールバック改善（生成段階でハザードハイライト・複線ルート・タイムライン等を返すよう修正）。
 - [ ] **ユースケースプリセット**: 自治会・学校・観光地などのテンプレ入力を UI に追加し、ジョブ起動時に適用。
 - [ ] **知識ベース拡充自動化**: `kb/` 配下の更新を Discovery Engine に自動反映する同期スクリプトを整備。
 
 ### フェーズB: 解決策の有効性向上 (P1)
-- [ ] **Scenario 出力の構造化**: GeoJSON に複数導線・タイムライン・資機材チェックを付与し、Markdown と整合性検証を追加。
+- [~] **Scenario 出力の構造化**: GeoJSON に複数導線・タイムライン・資機材チェックを付与し、Markdown と整合性検証を追加。（成果物反映済み。テスト・多地域展開は A-1/A-2 と連携して継続）
 - [ ] **高度安全レビュー**: 生成物の静的解析と KB スコアリングを組み合わせた指摘エンジンを実装。自治体チェックリスト JSON で網羅判定。
 - [ ] **KPI 永続化 & ダッシュボード**: Webhook を Firestore/BigQuery に保存し、Next.js 側に KPI 可視化＋再提案ロジックを実装。
 - [ ] **Imagen/Veo 本生成**: 生成 API 呼び出しと署名 URL 配布、字幕生成、コスト制御をワークフローに統合。
@@ -123,6 +122,6 @@
   - 将来の Imagen/Veo 連携でルート・タイムラインを視覚化するための ID 付与。
 
 #### A-2 進捗（2025-09-20）
-- RegionContext からのハザードサマリを Plan の `acceptance.must_include` に反映し、Scenario では `timeline`・`resource_checklist`・`alternate` ルートを自動生成するよう実装。
-- YAML/Gemini フロー双方で `context` をサマリに限定し、Firestore への保存エラーを回避。
-- flood / landslide ハイライトが実環境で確認済み。残課題（行政界 intersection / 追加ハザード）は A-1 と併せて継続。
+- RegionContext からのハザードサマリを Plan の `acceptance.must_include` に反映し、Scenario では `timeline`・`resource_checklist`・`alternate` ルートを自動生成するよう実装。Gemini 経由の出力にも後処理で強制適用。
+- Markdown 台本へ `Local Risk Highlights` / `地域特有の注意` を挿入し、洪水・急傾斜ハイライトを成果物に反映。成果物 (`output/script.md` 等) で確認済み。
+- flood / landslide ハイライトが実環境で確認済み。残課題（行政界 intersection / 追加ハザード）は A-1 と連携して継続。

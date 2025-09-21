@@ -40,10 +40,52 @@ class RegionContextStore:
             return base
         return Path(__file__).resolve().parents[1] / base
 
-    @staticmethod
-    def _match_key(location: Dict[str, Any]) -> Optional[str]:
+    _mapping_cache: Optional[list[dict[str, Any]]] = None
+
+    @classmethod
+    def _load_mapping_entries(cls) -> list[dict[str, Any]]:
+        if cls._mapping_cache is not None:
+            return cls._mapping_cache
+        raw = os.getenv("REGION_CONTEXT_MAP", "").strip()
+        entries: list[dict[str, Any]] = []
+        if raw:
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, list):
+                    entries = [e for e in parsed if isinstance(e, dict)]
+                elif isinstance(parsed, dict):
+                    maybe_entries = parsed.get("entries")
+                    if isinstance(maybe_entries, list):
+                        entries = [e for e in maybe_entries if isinstance(e, dict)]
+            except Exception:
+                entries = []
+        cls._mapping_cache = entries
+        return cls._mapping_cache
+
+    @classmethod
+    def _match_key(cls, location: Dict[str, Any]) -> Optional[str]:
         address = str(location.get("address", ""))
-        # Minimal heuristics; can be extended with geocoding later.
+        lat = location.get("lat")
+        lng = location.get("lng")
+
+        for entry in cls._load_mapping_entries():
+            filename = entry.get("file") or entry.get("filename")
+            if not filename:
+                continue
+            keywords = entry.get("address_keywords") or entry.get("keywords") or []
+            if keywords:
+                if not all(isinstance(kw, str) and kw in address for kw in keywords):
+                    continue
+            bbox = entry.get("bbox") or entry.get("bounds")
+            if bbox and all(isinstance(v, (int, float)) for v in bbox) and len(bbox) == 4:
+                if lat is None or lng is None:
+                    continue
+                min_lng, min_lat, max_lng, max_lat = bbox
+                if not (min_lat <= float(lat) <= max_lat and min_lng <= float(lng) <= max_lng):
+                    continue
+            return str(filename)
+
+        # Fallback heuristics
         if "戸塚区" in address and "横浜市" in address:
             return "totsuka.json"
         return None

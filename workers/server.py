@@ -67,6 +67,19 @@ def _plan_context_summary(region_ctx: Dict[str, Any]) -> Dict[str, Any]:
     return summary
 
 
+def _augment_plan_payload(plan: Dict[str, Any], context_summary: Optional[Dict[str, Any]]) -> None:
+    if not context_summary:
+        return
+    hazard_scores = context_summary.get("hazard_scores", {})
+    acceptance = plan.setdefault("acceptance", {})
+    must_include = acceptance.setdefault("must_include", [])
+    if hazard_scores.get("flood_plan") and "洪水想定エリアでの避難動線確認" not in must_include:
+        must_include.append("洪水想定エリアでの避難動線確認")
+    if hazard_scores.get("landslide") and "急傾斜地付近での安全導線点検" not in must_include:
+        must_include.append("急傾斜地付近での安全導線点検")
+    plan["context"] = context_summary
+
+
 def _build_routes(loc: Dict[str, Any], context_summary: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
     base_lat = loc.get("lat") or 0.0
     base_lng = loc.get("lng") or 0.0
@@ -184,6 +197,21 @@ def _augment_scenario_assets(
         assets["resource_checklist"] = checklist
 
 
+def _inject_highlights_into_script(
+    script: str,
+    highlights: List[str],
+    lang: str,
+) -> str:
+    if not highlights:
+        return script
+    section_title = "## Local Risk Highlights"
+    bullet = "- "
+    if lang == "ja":
+        section_title = "## 地域特有の注意"
+    lines = ["", section_title] + [f"{bullet}{note}" for note in highlights]
+    return script.rstrip() + "\n" + "\n".join(lines) + "\n"
+
+
 @app.get("/")
 def root() -> Dict[str, str]:
     return {"status": "ok", "service": "worker"}
@@ -242,8 +270,7 @@ def _build_plan(
             acceptance = raw.get("acceptance") or {}
             handoff = raw.get("handoff") or {"to": "Scenario Agent", "with": {}}
             plan = {"scenarios": scenarios, "acceptance": acceptance, "handoff": handoff}
-            if context_summary:
-                plan["context"] = context_summary
+            _augment_plan_payload(plan, context_summary)
             return plan
     except Exception as e:
         logger.exception("gemini_plan_failed: %s", e)
@@ -271,15 +298,7 @@ def _build_plan(
         "collection": ["checkin", "route_time", "post_quiz"],
     }
     acceptance_list = ["要配慮者ルート", "多言語掲示", "役割表CSV"]
-    hazard_scores: Dict[str, Any] = {}
-    if context_summary:
-        hazard_scores = context_summary.get("hazard_scores", {})
-        flood = hazard_scores.get("flood_plan")
-        if flood:
-            acceptance_list.append("洪水想定エリアでの避難動線確認")
-        landslide = hazard_scores.get("landslide")
-        if landslide:
-            acceptance_list.append("急傾斜地付近での安全導線点検")
+    hazard_scores: Dict[str, Any] = context_summary.get("hazard_scores", {}) if context_summary else {}
     acceptance = {"must_include": acceptance_list, "kpi_plan": kpi}
     plan = {
         "scenarios": scenarios,
@@ -287,8 +306,7 @@ def _build_plan(
         "handoff": {"to": "Scenario Agent", "with": {"scenario_id": scenarios[0]["id"]}},
         "location": {"address": loc.get("address"), "lat": loc.get("lat"), "lng": loc.get("lng")},
     }
-    if context_summary:
-        plan["context"] = context_summary
+    _augment_plan_payload(plan, context_summary)
     return plan
 
 
@@ -316,6 +334,11 @@ def _build_scenario(
             assets.setdefault("timeline", _build_timeline(context_summary))
             assets.setdefault("resource_checklist", _build_resource_checklist(context_summary))
             _augment_scenario_assets(assets, job_payload, context_summary)
+            highlights_g = context_summary.get("highlights", []) if context_summary else []
+            if highlights_g and isinstance(assets.get("script_md"), str):
+                primary_lang = langs[0] if isinstance(langs, list) and langs else "ja"
+                assets["script_md"] = _inject_highlights_into_script(assets["script_md"], highlights_g, primary_lang)
+                script_md = assets["script_md"]
             if storage:
                 script_path = f"jobs/{job_id}/script.md"
                 roles_path = f"jobs/{job_id}/roles.csv"
@@ -357,11 +380,6 @@ def _build_scenario(
                 "2. Initial response (safety check / fire suppression)\n"
                 "3. Evacuation guidance (assist persons with special needs)\n"
                 "4. Safety check & debrief\n"
-                + (
-                    "\n## Local Risk Highlights\n" + "\n".join(f"- {note}" for note in highlights)
-                    if highlights
-                    else ""
-                )
             )
         # default: ja
         return (
@@ -373,11 +391,6 @@ def _build_scenario(
             "2. 初期対応（安全確認/初期消火）\n"
             "3. 避難誘導（要配慮者を先導）\n"
             "4. 安全確認・振り返り\n"
-            + (
-                "\n## 地域特有の注意\n" + "\n".join(f"- {note}" for note in highlights)
-                if highlights
-                else ""
-            )
         )
 
     def _roles_for(lang: str) -> str:
@@ -404,6 +417,7 @@ def _build_scenario(
     # Generate per-language script/roles
     for lang in langs:
         script = _script_for(lang)
+        script = _inject_highlights_into_script(script, highlights, lang)
         roles = _roles_for(lang)
         entry: Dict[str, Any] = {"lang": lang, "script_md": script, "roles_csv": roles}
         if storage:
