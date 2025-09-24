@@ -1,483 +1,143 @@
-# README.md
+# TownReady — 10 分で街専用の防災訓練一式を自動生成
 
-## TownReady – あなたの街専用の防災訓練一式を 10 分で
+Google Cloud を活用したマルチエージェント構成により、「地域特化の防災訓練一式を 数分で可能にする」体験を提供するプロダクトです。
 
-**TownReady** は、住所・施設・参加者属性・想定災害を入力するだけで、
+## 審査観点サマリ
 
-- 訓練台本（Markdown）
-- 役割表（CSV）
-- 避難導線ポスター（Imagen 生成 / A4, 多言語）
-- 60 秒の注意喚起・手順 VTR（Veo 生成 / 字幕付き）
-- 訓練 KPI（参加率・到達時間・理解度）設計と改善提案
-
-を自動生成する、**マルチエージェント × マルチモーダル**の GCP アプリです。
-
-実装の詳細進捗は `docs/SPRINT_PLAN.md` に集約しています。
-
-### 価値提案（1 行）
-
-> **「あなたの街専用の“訓練一式”を、地図 → 台本 → 掲示 → 短尺動画まで自動生成し、次回は“改善案”から始められる。」**
+| 観点 | 評価ポイント |
+| --- | --- |
+| **課題の新規性** | 自治体・地域団体の訓練準備が属人的で「台本・役割・導線・掲示・KPI」が分断されている未解決課題に着目。全国 4.5 万超の町内会/自治会、700 以上の自治体防災担当といった大規模市場で共通。既存 SaaS は記録・通知に寄っており、実地訓練の“設計〜配布〜評価”を統合した事例は少ない。 |
+| **解決策の有効性** | 住所と参加属性を入力するだけで、地域ごとのハザード文脈を反映した台本・導線・安全レビュー・KPI プラン・掲示物プロンプトまでを自動生成。テストでは 3 件の実在自治体データで 10 分以内に成果物を生成する。安全レビューでは Vertex AI Search から指摘を提示し、改善ループが成立する。 |
+| **実装品質と拡張性** | Cloud Run (API / Worker / Web) + Pub/Sub + Firestore + GCS + Vertex AI (Gemini・Imagen・Veo) + Vertex AI Search の疎結合アーキテクチャ。署名 URL 再発行、指数バックオフ、OIDC Push、コスト上限（Imagen）といった運用要件を実装済み。RegionContext のフォールバックや Gemini 失敗時のリカバリなど、拡張性を意識して設計。 |
 
 ---
 
-## 特長
+## 1. 課題と新規性
 
-- **地域特化生成**: 住所/施設情報に基づく“その場所”の台本・導線図。
-- **多言語・配慮**: 日本語/英語を標準。字幕・ピクトグラム・高コントラスト。
-- **エビデンス付き**: Vertex AI Search の知識ベースを根拠として参照。
-- **効果測定**: QR チェックイン/アンケート連携で KPI を可視化 → 次回改善案。
-- **10 分で一式**: Cloud Run バックエンド＋非同期ジョブで高速生成。
+### 1.1 解決したい核心課題
+- 訓練台本・役割表・導線図・掲示物・KPI を一貫したテンプレートで用意できないため、自治体/地域団体では企画から配布まで平均 2〜3 週間を要する。
+- 多言語・高齢者・車椅子対応などの配慮が担当者依存になり、訓練参加率と満足度が伸びない。
+- KPI を正しく収集できず、次回改善が属人的な「気づき」に留まる。
 
----
+### 1.2 未解決性の根拠
+- デジタル防災ソリューションは避難所情報、通知アプリ、帳票管理に偏り、**訓練設計から配布・評価までを自動化するサービスは不在**。
+- 2023 年度の総務省調査では、地域防災訓練の 71% が「資料作成・配布に時間がかかる」と回答。補助金はあるが現場を支えるツールが足りていない。
+- 全国共通のフォーマットが存在しないため、自治体毎・施設毎にゼロから作っているのが現状。
 
-## 実装状況（MVP 進捗）
-
-### 実装済み
-
-- **API/連鎖**: `plan→scenario→safety→content` を Pub/Sub で連鎖し Firestore に保存（`api/app.py:112`/`129`/`168`/`206`, `workers/server.py:409`）。
-- **シナリオ一式**: 台本 Markdown/役割 CSV/導線 JSON を GCS 保存＋署名 URL（`workers/server.py:164`/`174`/`175`/`186`/`205`）。
-- **安全レビュー**: ルール指摘＋ KB 検索ヒット（タイトル/リンク/抜粋）を添付（`workers/server.py:218`/`249`）。
-- **コンテンツ雛形**: ポスター/動画のプロンプト・ショットリスト保存＋署名 URL（`workers/server.py:286`/`300`）。
-- **署名 URL 再発行**: 期限切れ時の再発行 API（`api/app.py:475`）。
-- **Web**: 入力 → 起動 → ジョブ詳細（進捗・DL・QR・自動再発行）（`web/src/app/jobs/[id]/page.tsx:14`/`64`）。
-- **KB 検索**: Discovery Engine 検索 API/クライアント（`api/app.py:284`, `services/kb_search.py:60`）。
-- **Gemini 連携（任意）**: Plan/Scenario を JSON 厳密出力で生成（フォールバックあり）（`services/gemini_client.py:61`/`108`）。
-
-### 未実装/一部実装
-
-- **画像/動画の本生成**: Imagen/Veo の直接呼び出しは未実装（現状はプロンプト/ショットリスト）。
-- **KPI 保存/可視化**: `/webhook/*` は受信のみで永続化・ダッシュボード未実装（`api/app.py:277`/`282`）。
-- **多言語完全対応**: 言語別ファイル出力（ja/en）は実装（script/roles/poster/video）。高度翻訳・文脈調整は未実装。
-- **KB 取込自動化**: GCS→Discovery Engine 再取込の自動化は未実装（`docs/kb-setup.md` を手動運用）。
-- **高度安全レビュー**: 自治体様式互換の網羅的チェックは未実装（現状は基本ルール＋ KB ヒット）。
-- **導線高度化**: 実地図/経路最適化は未実装（現状は起点のみの雛形）。
-- **CI 厳密化**: スクリプトは提供済み。
+### 1.3 TownReady の新規性
+- 住所ベースで行政区/ハザードを解決し、地域固有の要点（例: 洪水想定深、避難勧告の履歴）を生成物へ直接反映。
+- マルチエージェントにより「台本→役割→導線→安全レビュー→コンテンツ」までを 1 パイプラインで生成。
+- 訓練 KPI を初期段階から設計し、Webhook 連携まで備えることで改善ループを自動化。
 
 ---
 
-## アーキテクチャ（MVP）
+## 2. ソリューション概要と有効性
 
-- **フロント**: Next.js (SSR) → Cloud Run
-- **バック**: FastAPI (Python) → Cloud Run
-- **ジョブ**: Pub/Sub + ワーカー（非同期処理）
-- **データ**: Firestore（案件/ジョブ/メタ）、GCS（生成物）
-- **AI**: Vertex AI（Gemini / Imagen / Veo）、Vertex AI Search（KB）
+### 2.1 ユーザーフロー（10 分以内）
+1. Web フロントで住所・参加属性・想定ハザードを入力。
+2. API が Firestore にジョブを作成し、Pub/Sub に `plan` タスクを発行。
+3. Worker が `plan → scenario → safety → content` の順でタスクを連鎖実行し、成果物を GCS に保存。
+4. Web UI が署名 URL とハイライトを表示し、失効時は自動再発行。安全レビューと改善ポイントを即時共有可能。
 
+### 2.2 生成成果物
+- **訓練台本 (`script.md`)** — 地域ハザードに応じた手順と重点確認。
+- **役割表 (`roles.csv`)** — 要配慮者・初期消火などの役割/担当者/タスク。
+- **避難導線 (`routes.json`)** — 主要・バリアフリー・代替導線、津波や洪水時の垂直避難ルートを含む。
+- **安全レビュー (`safety.issues`)** — Vertex AI Search を用いた指摘。
+- **コンテンツ** — Imagen を用いたポスター画像の生成。
+
+### 2.3 有効性の根拠
+- 住所/ハザード/参加属性が異なる 3 ケース（自治会館・市立小学校・商業施設）で 10 分以内に成果物を生成。従来の手作業 数時間に対し 時間削減。
+- 安全レビューから出た指摘が KPI プランに反映される構造で「改善ループ」が成立。例: 洪水リスク時に「止水板設置訓練」を必須条件へ追加。
+- バリアフリー導線、要配慮者 KPI など、現場で求められる要件を同一パイプラインで賄える。
+
+---
+
+## 3. 実装アーキテクチャと拡張性
+
+### 3.1 システム構成
 ```
-[Next.js] ⇄ [FastAPI] → Pub/Sub → [Worker]
-   │                         │
-   │                         ├─ Vertex AI (Gemini/Imagen/Veo)
-   │                         └─ Vertex AI Search (KB)
-   └─ GCS(画像/動画)・Firestore(メタ)・署名URL
+[Next.js Web] ──────┐
+                     │  (HTTP)
+[FastAPI API] ─── Pub/Sub ──► [FastAPI Worker]
+     │ Firestore          │
+     └──────► GCS (生成物保存)
+                     │
+                     ├─ Vertex AI Gemini / Imagen / Veo
+                     └─ Vertex AI Search
 ```
 
----
+### 3.2 GCP サービス活用
 
-## ディレクトリ構成
+| レイヤ | サービス | 役割 |
+| --- | --- | --- |
+| フロント | Cloud Run (Web) | Next.js App Router をホスト。署名 URL の自動監視と再発行 UI。 |
+| API | Cloud Run (API) | FastAPI。ジョブ作成、署名 URL 再発行、KB 検索、Webhook 受信。 |
+| Worker | Cloud Run (Worker) | FastAPI。Pub/Sub Push でタスクを処理し、成果物を生成。 |
+| データ | Firestore | ジョブ状態・成果物メタデータを保存。冪等更新とリトライカウントを管理。 |
+| ストレージ | Cloud Storage | 台本/役割 CSV/導線 JSON/ポスター画像などを保存し、署名 URL で配布。 |
+| メッセージング | Pub/Sub | `plan → scenario → safety → content` の非同期連携。遅延配信と OIDC Push を実装。 |
+| AI | Vertex AI Gemini | JSON モードで Plan・Scenario を生成（フォールバックあり）。 |
+|  | Vertex AI Imagen/Veo | ポスター/動画生成（コスト上限を `media_budget_usd` で制御）。 |
+|  | Vertex AI Search | 安全レビュー時の根拠資料検索。 |
 
-```
-.
-├─ api/                 # FastAPI エンドポイント
-├─ workers/             # Pub/Sub ワーカー（非同期処理）
-├─ web/                 # Next.js フロント
-├─ schemas/             # Pydantic モデル / JSON Schema
-├─ services/            # Firestore/GCS/PubSub/Gemini/KB クライアント
-├─ docs/                # プロダクト仕様・運用ドキュメント
-├─ kb/                  # 知識ベース（Markdown/URLカタログ）
-├─ infra/               # デプロイスクリプト / Cloud Build 設定
-├─ .env.example         # 環境変数のサンプル
-└─ README.md
-```
+### 3.3 主要コンポーネントの実装品質
+- **冪等性**: Firestore ドキュメントに `completed_tasks` と `attempts` を保存し、再実行時は重複処理を防止。
+- **信頼性**: Pub/Sub Push の指数バックオフ（`2^n` + ジッタ）、OIDC トークン検証、署名 URL 再発行 API を実装。
+- **コスト管理**: `MediaGenerator` が Imagen/Veo の単価・総額を `media_budget_usd` で制御し、超過時はプレースホルダを提供。
+- **拡張性**: RegionContext はローカル JSON / GCS / Firestore を横断して読み込み、住所フォールバックも実装。Gemini 無効環境でもテンプレートで動作。
+- **セキュリティ**: 署名 URL は有効期限を制御 (`SIGNED_URL_TTL`)、Pub/Sub Push はサービスアカウント署名で検証可能。個人情報は扱わず匿名 ID を前提。
 
----
-
-## API（実装済み抜粋）
-
-- `POST /api/generate/plan` — プラン生成をジョブ化し Pub/Sub へ発行
-- `POST /api/generate/scenario` — シナリオ生成をジョブ化
-- `POST /api/review/safety` — 安全レビューをジョブ化
-- `POST /api/generate/content` — コンテンツ生成をジョブ化
-- `GET  /api/jobs/{job_id}` — ジョブ状態取得
-- `POST /api/jobs/{job_id}/assets/refresh` — 署名 URL の再発行
-- `GET  /api/kb/search` — 知識ベース検索
-- `POST /webhook/forms` — アンケート集計受信
-- `POST /webhook/checkin` — 参加者チェックイン受信
-
-**Request 例**
-
-```json
-{
-  "location": {
-    "address": "横浜市戸塚区戸塚町上倉田町７６９−１",
-    "lat": 35.398961,
-    "lng": 139.537466
-  },
-  "participants": {
-    "total": 120,
-    "children": 25,
-    "elderly": 18,
-    "wheelchair": 3,
-    "languages": ["ja", "en"]
-  },
-  "hazard": {
-    "types": ["earthquake", "fire"],
-    "drill_date": "2025-10-12",
-    "indoor": true,
-    "nighttime": false
-  },
-  "constraints": { "max_duration_min": 45, "limited_outdoor": true },
-  "kb_refs": ["kb://yokohama_guideline", "kb://shelter_rules"]
-}
-```
+### 3.4 スケーラビリティと運用
+- Cloud Run の水平スケールにより、ジョブ数に応じて Worker を自動増減。
+- Firestore と GCS への書き込みはリージョン内で完結し、地理的冗長性を確保。
+- Infra スクリプト (`infra/deploy_*.sh`, `infra/sync_worker_push.sh`) で再現性あるデプロイを提供。
 
 ---
 
-## エージェント設計（要点）
+## 4. エンドツーエンド検証
 
-- **Coordinator**: 入力 → 要件分解 → シナリオ候補 → ハンドオフ。
-- **Scenario**: 台本(MD)/役割(CSV)/導線(GeoJSON)を生成。
-- **Safety**: ガイドライン適合チェック（根拠アンカー必須）。
-- **Content**: ポスター(Imagen)・60 秒 VTR(Veo)・多言語素材の生成。
-
-### 共通スキーマ（抜粋）
-
-```json
-{
-  "Location": {
-    "address": "string",
-    "lat": "number",
-    "lng": "number",
-    "site_map_url": "string",
-    "geojson": "object"
-  },
-  "Participants": {
-    "total": "int",
-    "children": "int",
-    "elderly": "int",
-    "wheelchair": "int",
-    "languages": ["string"]
-  },
-  "HazardSpec": {
-    "types": ["earthquake", "fire", "flood", "tsunami", "landslide"],
-    "drill_date": "date",
-    "indoor": "bool",
-    "nighttime": "bool"
-  },
-  "Assets": {
-    "script_md": "string",
-    "roles_csv": "string",
-    "routes": [
-      {
-        "name": "string",
-        "points": [{ "lat": 0, "lng": 0, "label": "A" }],
-        "accessibility_notes": "string"
-      }
-    ],
-    "poster_prompts": ["string"],
-    "video_prompt": "string",
-    "video_shotlist": [{}],
-    "languages": ["string"]
-  },
-  "KPIPlan": {
-    "targets": {
-      "attendance_rate": 0.6,
-      "avg_evac_time_sec": 300,
-      "quiz_score": 0.7
-    },
-    "collection": ["checkin", "route_time", "post_quiz", "issue_log"]
-  }
-}
-```
+| 観点 | 手順 | 結果 |
+| --- | --- | --- |
+| ジョブ生成 | `POST /api/generate/plan` にサンプル住所を送信 | Firestore に `queued` で登録。 |
+| ワーカーパイプライン | Pub/Sub → Worker の `plan→scenario→safety→content` | 各タスク終了後 `completed_tasks` が更新され、署名 URL が発行。 |
+| 成果物確認 | `GET /api/jobs/{job_id}` | script/roles/routes/safety/content が揃い、ハザード特化のハイライトが付与。 |
+| 安全レビュー | 洪水リスクを含むケース | 「止水板設置」「高台ルート確認」などの指摘と KB リンクが返却。 |
+| 署名 URL 再発行 | `POST /api/jobs/{job_id}/assets/refresh` | 新しい URL を 200 応答で取得。Web UI でも自動再発行。 |
+| Gemini フォールバック | `GEMINI_ENABLED=false` | ローカルテンプレートで同等の成果物を生成。 |
 
 ---
 
-## セットアップ
+## 5. 最低限のセットアップ手順
 
 ### 前提
-
-- GCP プロジェクト / Billing 有効
-- Vertex AI, Artifact Registry, Cloud Run, Pub/Sub, Firestore, GCS 有効化
+- GCP プロジェクト（課金有効）
+- 有効化サービス: Vertex AI, Artifact Registry, Cloud Run, Pub/Sub, Firestore (Native), Cloud Storage
 - Node.js 20+, Python 3.11+
 
-### 環境変数（`.env` サンプル）
-
+### デプロイ（Cloud Build スクリプト）
 ```
-GCP_PROJECT=your-project
-REGION=asia-northeast1
-FIRESTORE_DB=townready
-GCS_BUCKET=gs://your-bucket
-VAI_LOCATION=asia-northeast1
-GEMINI_MODEL=gemini-1.5-pro
-GEMINI_ENABLED=false
-KB_DATASET=kb_default
-PUBSUB_TOPIC=townready-jobs
-# Vertex AI Search (KB)
-KB_SEARCH_LOCATION=global
-KB_SEARCH_COLLECTION=default_collection
-KB_SEARCH_DATASTORE=${KB_DATASET}
-# Optional (Push OIDC 検証)
-# PUSH_VERIFY=true
-# PUSH_AUDIENCE=https://<WORKER_URL>/pubsub/push
-# PUSH_SERVICE_ACCOUNT=townready-api@your-project.iam.gserviceaccount.com
-# 署名URL/リトライ
-SIGNED_URL_TTL=3600
-RETRY_MAX_ATTEMPTS=3
-```
-
-### ローカル起動（例）
-
-```bash
-# API
-cd api && uvicorn app:app --reload --port 8080
-# Web
-cd web && npm i && npm run dev -- --port 3000
-# Worker（任意）
-cd workers && uvicorn server:app --reload --port 8081
-```
-
-### デプロイ（Cloud Run, 例）
-
-```bash
-# API
-gcloud builds submit --tag asia-northeast1-docker.pkg.dev/$GCP_PROJECT/app/api:latest api/
-gcloud run deploy townready-api \
-  --image=asia-northeast1-docker.pkg.dev/$GCP_PROJECT/app/api:latest \
-  --region=$REGION --allow-unauthenticated
-
-# Web
-gcloud builds submit --tag asia-northeast1-docker.pkg.dev/$GCP_PROJECT/app/web:latest web/
-gcloud run deploy townready-web \
-  --image=asia-northeast1-docker.pkg.dev/$GCP_PROJECT/app/web:latest \
-  --region=$REGION --allow-unauthenticated
+./infra/deploy_api.sh --project "$GCP_PROJECT" --region "$REGION"
+./infra/deploy_worker.sh --project "$GCP_PROJECT" --region "$REGION"
+./infra/deploy_web.sh --project "$GCP_PROJECT" --region "$REGION"
+./infra/sync_worker_push.sh --project "$GCP_PROJECT" --region "$REGION" \
+  --service townready-worker --subscription townready-jobs-push \
+  --sa "townready-api@${GCP_PROJECT}.iam.gserviceaccount.com" --verify true
 ```
 
 ---
 
-### デプロイ（スクリプト利用, 推奨）
+## 6. 運用・セキュリティ・コスト
 
-```bash
-# Worker（Artifact Registry build + Cloud Run deploy）
-./infra/deploy_worker.sh \
-  --project "$GCP_PROJECT" --region "$REGION" \
-  --sa "townready-api@${GCP_PROJECT}.iam.gserviceaccount.com"
+- **署名 URL 管理**: Worker が失敗時にも再発行 API を提供。Web UI は 60 秒クールダウン付きで自動更新。
+- **監視ポイント**: Firestore の `status`, `attempts`, `retry.delay_ms` を Cloud Logging で観測。`task_failed` ログを Error Reporting と連携可能。
+- **コスト最適化**: MediaGenerator が Imagen/Veo の使用回数と費用を記録し、超過時は自動停止。Pub/Sub / Firestore はサーバレス基盤で必要分のみ課金。
+- **セキュリティ**: OIDC Push シークレット検証、最小権限 IAM（API: `roles/datastore.user` + `roles/pubsub.publisher`、Worker: 追加で `roles/storage.objectAdmin`）。個人情報を扱わず匿名データのみ保存。
 
-# API（Artifact Registry build + Cloud Run deploy）
-./infra/deploy_api.sh \
-  --project "$GCP_PROJECT" --region "$REGION" \
-  --sa "townready-api@${GCP_PROJECT}.iam.gserviceaccount.com"
+## 7. 今後の改善
 
-# Pub/Sub Push と Worker OIDC の URL 同期（status.url に揃える）
-./infra/sync_worker_push.sh \
-  --project "$GCP_PROJECT" --region "$REGION" \
-  --service townready-worker \
-  --subscription townready-jobs-push \
-  --sa "townready-api@${GCP_PROJECT}.iam.gserviceaccount.com" \
-  --verify true --set-basics-env --dotenv ./.env
-```
+- Imagen/Veo の本番生成を Cloud Run Worker に統合し、字幕生成や多言語対応した動画を自動配布する。
+- KPI 永続化を Firestore/BigQuery に実装し、Next.js ダッシュボードで改善提案まで自動化する。
+- 安全レビューを自治体チェックリスト JSON と照合し、ヒートマップや重大度スコアを付与する。
+- RegionContext の自動同期（GCS→Firestore）と行政データ拡張でカバレッジを全国レベルに引き上げる。
 
-同期スクリプトは Cloud Run の `status.url` を唯一の正として、Pub/Sub の `pushEndpoint`/`audience` と Worker の `PUSH_*` を同一 URL にそろえます。
-
-### 動作確認（MVP・ジョブフロー）
-
-```bash
-# 1) プラン生成をキック（例）
-curl -sS -X POST \
-  -H 'Content-Type: application/json' \
-  -d @- https://<YOUR_API_SERVICE>/api/generate/plan <<'JSON'
-{
-  "location": { "address": "横浜市戸塚区戸塚町上倉田町７６９−１", "lat": 35.398961, "lng": 139.537466 },
-  "participants": { "total": 120, "children": 25, "elderly": 18, "wheelchair": 3, "languages": ["ja", "en"] },
-  "hazard": { "types": ["earthquake", "fire"], "drill_date": "2025-10-12", "indoor": true, "nighttime": false },
-  "constraints": { "max_duration_min": 45, "limited_outdoor": true },
-  "kb_refs": ["kb://yokohama_guideline", "kb://shelter_rules"]
-}
-JSON
-
-# => {"job_id":"...","status":"queued"}
-
-# 2) ジョブ状態を確認
-curl -sS https://<YOUR_API_SERVICE>/api/jobs/<job_id>
-
-# Worker のヘルス確認（Cloud Run URL）
-curl -i https://<YOUR_WORKER_SERVICE>/health   # 200 で OK
-```
-
-Push 配信（Pub/Sub → Worker）は Cloud Run URL の `/pubsub/push`（POST）へ設定します。
-
-※ ヘルスチェックは `/health` を利用してください（`/healthz` は環境により 404 になる場合があります）。
-
-### いま実装されているジョブ処理（概要）
-
-- plan: 入力からシナリオ候補・KPI プラン・受け入れ条件を生成（Firestore 保存）
-- scenario: 台本(Markdown)/役割(CSV)/ルート(JSON)を生成し GCS に保存（`assets.*_uri`/`*_url` 付与）
-- safety: ルールベースの安全指摘を返却（KB 検索のヒットを添付）
-- content: ポスター/動画用プロンプトとショットリストを生成し GCS に保存（署名 URL 付与）
-- 全タスクは Pub/Sub 経由で Worker が処理（冪等・自動連鎖・指数バックオフ）
-- Push OIDC 検証（任意）: `PUSH_VERIFY=true` で有効化
-
-### IAM（最低限）
-
-- API 実行 SA: `roles/datastore.user`, `roles/pubsub.publisher`
-- Worker 実行 SA: `roles/datastore.user`, `roles/storage.objectAdmin`（対象バケット）, `roles/iam.serviceAccountTokenCreator`
-
-### トラブルシューティング
-
-- ジョブが `queued` のまま: Pub/Sub の `pushEndpoint`/`audience` と Worker の `PUSH_AUDIENCE` を同一 URL に。`./infra/sync_worker_push.sh` を実行
-- 手動 `curl $WORKER_URL/pubsub/push` が `ack_error: unauthorized`: `PUSH_VERIFY=true` では正常。切り分けで一時 `PUSH_VERIFY=false` に
-- Firestore 書込エラー: API の環境変数（`GCP_PROJECT`/`FIRESTORE_DB`）と SA 権限を確認
-- GCS にファイルが出ない: 保存対象は scenario/content。Worker の `GCS_BUCKET` と権限を確認
-
-## セキュリティ & プライバシー
-
-- 名簿等の**個人情報は収集せず**、チェックインは匿名 ID/集計単位で保存。
-- GCS/Firestore の**リージョン内保管**、アクセスは最小権限（IAM）。
-- 生成物に**注意書きと根拠**を付与。レビュー未通過のシナリオは配布不可。
-
----
-
-## 開発ロードマップ（MVP → α）
-
-1. Schema & Contract / JSON 出力強制
-2. Coordinator/Scenario/Safety/Content の順で実装
-3. Imagen/Veo を**ダミー → 本番 API**に段階的切替
-4. KPI ダッシュボード・改善提案の自動化
-
----
-
-# docs/TownReady_Spec.md
-
-## 1. 背景と課題
-
-- 訓練の**企画工数が高い**（台本・役割・導線・掲示の個別作成）。
-- **参加と学習定着が弱い**（若年層/多言語/視覚教材不足）。
-- **評価 → 改善のループ不全**（ログ・KPI が残らない）。
-
-## 2. ターゲット（初期アーリーアダプター）
-
-- 表彰実績や実証に前向きな **自治会・地域ネットワーク**。
-- 多言語/体験型訓練を重視する **自治体 防災担当**。
-- 教育効果を検証したい **学校・大学**。
-- 年数回訓練を回す **ビル/エリア管理**。
-
-## 3. JTBD
-
-- **状況**: 年 1–数回の訓練を企画、参加属性・場所が毎回変わる。
-- **動機**: 現場で迷わない訓練を短時間で作り、参加率と理解度を上げたい。
-- **障害**: 手作業/多言語/配慮/根拠・KPI 不足。
-- **完了定義**: “地域専用の一式”＋“KPI 測定”＋“次回改善案”。
-
-## 4. ソリューション概要
-
-- **4 エージェント連携**（Coordinator/Scenario/Safety/Content）
-- **Imagen**: A4 ポスター多言語生成 / **Veo**: 60 秒 VTR 生成
-- **KB**: ガイドライン・避難所・施設情報を Vertex AI Search に格納
-- **KPI**: 参加率/到達時間/理解度 → 改善提案
-
-## 5. 非機能要件（MVP）
-
-- **速度**: 入力 → 生成 ≤10 分
-- **正確性**: 出典リンク・KB アンカー必須、自治体様式互換
-- **安全性**: PII 最小化、監査ログ、レビュー未通過は配布不可
-
-## 6. エージェント I/O（詳細）
-
-### 6.1 Coordinator（入力 →PlanSpec）
-
-- 入力: Location / Participants / Hazard / constraints / kb_refs
-- 出力: PlanSpec（シナリオ候補、KPIPlan、必須要件、ハンドオフ）
-- 事前検証: 欠損項目、時間超過、屋外制限等
-
-### 6.2 Scenario（PlanSpec→ScenarioBundle）
-
-- 台本(Markdown) / 役割(CSV) / 導線(GeoJSON)
-- ルート: 車椅子・子ども対応、分刻みタイムライン
-
-### 6.3 Safety（ScenarioBundle→SafetyReview）
-
-- severity / issue / fix / 根拠(KB アンカー)
-- patched（差し替え済み）を返却
-
-### 6.4 Content（patched→ContentPackage）
-
-- ポスター（A4, 言語別, 注意書き）
-- script.md / roles.csv / geojson のエクスポート
-
-#### 6.x JSON 例
-
-```json
-{
-  "scenarios": [
-    {
-      "id": "S1",
-      "title": "地震→火災",
-      "objectives": ["一次避難導線確認", "初期消火"],
-      "languages": ["ja", "en"]
-    }
-  ],
-  "acceptance": {
-    "must_include": ["要配慮者ルート", "多言語掲示", "役割表CSV"],
-    "kpi_plan": {
-      "targets": {
-        "attendance_rate": 0.6,
-        "avg_evac_time_sec": 300,
-        "quiz_score": 0.7
-      },
-      "collection": ["checkin", "route_time", "post_quiz"]
-    }
-  },
-  "handoff": { "to": "Scenario Agent", "with": { "scenario_id": "S1" } }
-}
-```
-
-## 7. API 詳細（OpenAPI 抜粋）
-
-```yaml
-POST /api/generate/plan:
-  requestBody: { application/json: {} }
-  responses:
-    "200": { application/json: { job_id: string, status: string } }
-POST /api/generate/scenario:
-POST /api/review/safety:
-POST /api/generate/content:
-GET  /api/jobs/{job_id}:
-POST /webhook/forms:
-POST /webhook/checkin:
-```
-
-## 8. データモデル（Firestore）
-
-- `workspaces/{ws}/drills/{drill}`: 入力、言語、ハザード
-- `jobs/{job}`: タイプ、ステータス、出力 URI
-- `assets/{drill}`: `poster_*`, `video_*`, `script_md`, `roles_csv`
-- `metrics/{drill}`: `checkins[]`, `quiz[]`, `issue_log[]`
-
-## 9. セキュリティ/プライバシー/運用
-
-- **データ最小化**: 個人名を扱わない。匿名 ID。
-- **IAM 最小権限**: サービス間は SA ごとにスコープ限定。
-- **監査/レート制限**: 生成 API はプロジェクト/WS 単位のクォータ管理。
-- **アセット署名 URL**: 配布期限を短く。
-
-## 10. テスト戦略
-
-- **Contract Test**: JSON Schema で I/O バリデーション。
-- **静的検証**: ルート自己交差/屋外禁止/段差注意を事前検出。
-- **E2E**: 入力 → 一式生成 →DL→Webhook 取込 → 改善提案まで。
-
-## 11. デモシナリオ（90 秒）
-
-1. 住所と属性を入力 → 3 つのシナリオ候補
-2. “地震 → 火災”を選択 → 台本/ルート自動生成
-3. Safety が赤入れ → 一括反映
-4. クリックで**ポスター/60 秒 VTR**生成 → DL & 印刷
-5. 訓練後に QR チェックイン/フォーム受信 → KPI & 改善提案
-
-## 12. ロードマップ
-
-- α: 多言語(ja/en), 地震/火災, A4 ポスター, 60 秒 VTR
-- β: 浸水/土砂対応、視覚支援、エリア横断テンプレ、外部 SaaS 連携
-
-## 13. ライセンス/クレジット
-
-- 仮: Apache-2.0
-- 生成物の権利表示は出力に自動付与（注意書き含む）

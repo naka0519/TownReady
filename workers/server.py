@@ -1012,24 +1012,32 @@ def _build_content(job_payload: Dict[str, Any], scenario_assets: Dict[str, Any],
     location_info = job_payload.get("location", {})
     hazard_text = ",".join(types) if types else "複合災害"
     base_prompt_template = (
-        "目的: 避難訓練ポスターの背景画像を作る。\n"
-        "テーマ: 「参加しやすい・安心・地域で助け合う」。\n"
-        "禁止: 災害の恐怖表現、瓦礫、負傷、炎、洪水の直接描写、過度な緊迫感、文字のベタ描き。\n"
-        "大枠: A3 縦 / 300DPI / 印刷想定。\n"
-        "構図: 上=見出し余白、中央=イメージ、下=情報欄余白。視線誘導の緩やかなS字。\n"
-        "スタイル: {style_choice}。\n"
-        "被写体: 一般的な街並み、誘導サイン、集会所や公園、子ども連れや高齢者、車椅子ユーザーが一緒に歩ける歩道。\n"
-        "色: {brand_colors}（色弱対応・高コントラスト）/ 背景は淡い、情報欄は無地に近い。\n"
-        "余白: 上50mm, 右中段80×120mm, 下60mm（概ねで良い）。\n"
-        "照明: 明るく安心、柔らかい日中光。\n"
-        "トーン: 前向き、参加しやすい、恐怖心を煽らない。\n"
-        "想定ハザード: {hazard_text}。\n"
+        "Goal: create a background image for an evacuation drill poster; text and QR codes will be composited later.\n"
+        "Theme: friendly, safe, community-based mutual support.\n"
+        "Avoid: fear-inducing scenes, rubble, injuries, flames.\n"
+        "Negative prompt: no text, no numbers, no typography, no signage with words, no distress, no emergency vehicles, no smoke, no darkness, no dramatic warning icons.\n"
+        "Format: A3 vertical, 300 DPI print quality (approx. 4000 x 5667 px).\n"
+        "Layout: headline space at top, main visual in the middle, information area at bottom, gentle S-shaped flow.\n"
+        "Style: {style_choice}.\n"
+        "Subject: inclusive town streets in {city_or_town}, wayfinding signs, community centers or parks, families with children, seniors, wheelchair users traveling together.\n"
+        "Palette: {brand_colors} (color-blind friendly, high contrast); soft background, minimal solid blocks for information areas.\n"
+        "Margins: approx. top 50 mm, mid-right 80 x 120 mm, bottom 60 mm.\n"
+        "Lighting: bright, reassuring daytime light with soft shadows.\n"
+        "Tone: positive, welcoming, encourages participation without fear.\n"
+        "Scenario focus: {hazard_text}.\n"
     )
+    facility_label = (job_payload.get('facility_profile') or {}).get('label')
+    city_or_town = facility_label or city_or_town
+    facility_profile = job_payload.get('facility_profile') or {}
+    facility_label = facility_profile.get('label') or ''
+    facility_city = job_payload.get('location', {}).get('city') or job_payload.get('location', {}).get('ward') or ''
+    subject_city = facility_label or facility_city or 'the community'
     poster_prompts = [
         base_prompt_template.format(
             style_choice=style_choice,
             brand_colors=brand_color_text,
             hazard_text=hazard_text,
+            city_or_town=subject_city,
         )
         for _ in langs
     ]
