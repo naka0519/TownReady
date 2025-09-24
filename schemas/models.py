@@ -102,6 +102,15 @@ class GenerateBaseRequest(BaseModel):
     hazard: HazardSpec
     constraints: Optional[Constraints] = None
     kb_refs: List[str] = Field(default_factory=list)
+    region_context_ref: Optional[str] = Field(default=None, description="Resolved RegionContext catalog id")
+    region_context_snapshot: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Lightweight RegionContext summary (hazard scores/highlights)",
+    )
+    facility_profile: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Preset facility metadata to tailor KPI/timeline",
+    )
 
 
 class LatLng(BaseModel):

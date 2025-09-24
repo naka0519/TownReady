@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+import os
 import sys
 import types
 import unittest
@@ -122,14 +123,30 @@ def _install_stubs() -> None:
 _install_stubs()
 
 try:
-    from GCP_AI_Agent_hackathon.workers.server import _build_plan, _build_scenario, _plan_context_summary  # type: ignore
+    from GCP_AI_Agent_hackathon.workers.server import (  # type: ignore
+        _build_plan,
+        _build_safety,
+        _build_scenario,
+        _load_region_context,
+        _plan_context_summary,
+    )
 except Exception:  # pragma: no cover
     import sys
     sys.path.append(str(Path(__file__).resolve().parents[1]))
-    from workers.server import _build_plan, _build_scenario, _plan_context_summary  # type: ignore
+    from workers.server import (  # type: ignore
+        _build_plan,
+        _build_safety,
+        _build_scenario,
+        _load_region_context,
+        _plan_context_summary,
+    )
 
 
 class PlanScenarioFallbackTests(unittest.TestCase):
+    def setUp(self) -> None:
+        base_dir = Path(__file__).resolve().parents[1] / "kb" / "region_context"
+        os.environ["REGION_CONTEXT_DIR"] = str(base_dir)
+
     def _job_payload(self):
         return {
             "location": {
@@ -187,6 +204,85 @@ class PlanScenarioFallbackTests(unittest.TestCase):
         self.assertIn("避難導線リーダー", assets["roles_csv"])
         self.assertIn("## ハザード別の重点確認", assets["script_md"])
         self.assertIn("止水板設置", "\n".join(assets["highlights"]))
+        self.assertEqual(assets.get("context", {}).get("region_context_id"), summary.get("region_context_id"))
+
+    def test_safety_uses_context_highlights(self):
+        payload = self._job_payload()
+        context = {
+            "hazard_scores": {
+                "flood_plan": {"coverage_km2": 1.2},
+                "landslide": {"coverage_km2": 0.4},
+            },
+            "highlights": ["洪水: 最大浸水深 2.5m / 想定面積 1.2km²"],
+            "meta": {"region_context_id": "region-14110", "source": "test"},
+        }
+        summary = _plan_context_summary(context)
+        scenario = _build_scenario("job456", payload, storage=None, context_summary=summary)
+        safety = _build_safety(payload, scenario["assets"], context_summary=summary)
+        self.assertEqual(safety.get("context", {}).get("source"), summary.get("source"))
+        issues_joined = " ".join(issue.get("issue", "") for issue in safety["issues"])
+        self.assertIn("浸水想定区域", issues_joined)
+        region_issue = [issue for issue in safety["issues"] if issue.get("issue") == "地域特有のリスク共有"]
+        self.assertTrue(region_issue)
+        self.assertIn("洪水", " ".join(region_issue[0].get("highlights", [])))
+
+    def test_region_context_fallback_when_missing(self):
+        payload = self._job_payload()
+        payload["location"] = {
+            "address": "東京都千代田区丸の内１丁目",
+            "lat": 35.681236,
+            "lng": 139.767125,
+        }
+        payload["hazard"]["types"] = ["flood", "landslide"]
+        context = _load_region_context(payload)
+        self.assertIsNotNone(context)
+        assert context is not None
+        meta = context.get("meta", {})
+        self.assertEqual(meta.get("source"), "fallback")
+        summary = _plan_context_summary(context)
+        self.assertEqual(summary.get("source"), "fallback")
+        plan = _build_plan(payload, summary)
+        self.assertIn("context", plan)
+        scenario = _build_scenario("job789", payload, storage=None, context_summary=summary)
+        self.assertIn("context", scenario["assets"])
+        safety = _build_safety(payload, scenario["assets"], summary)
+        self.assertEqual(safety.get("context", {}).get("source"), "fallback")
+        issues_joined = " ".join(issue.get("issue", "") for issue in safety["issues"])
+        self.assertIn("浸水想定区域", issues_joined)
+
+    def test_facility_profile_adjusts_outputs(self):
+        payload = self._job_payload()
+        payload["facility_profile"] = {
+            "id": "municipal-school",
+            "category": "school",
+            "kpi_targets": {
+                "attendanceRate": 0.97,
+                "avgEvacTimeSec": 210,
+                "quizScore": 0.88,
+            },
+            "acceptance_additions": ["学年別引率班と保護者引き渡し動線の整備"],
+            "timeline_focus": ["校内放送と防災倉庫の開錠手順確認"],
+            "resource_focus": ["学級別名簿"],
+        }
+        context = {
+            "hazard_scores": {
+                "flood_plan": {"coverage_km2": 0.5},
+            },
+            "meta": {"region_context_id": "region-14110", "source": "catalog"},
+        }
+        summary = _plan_context_summary(context)
+        plan = _build_plan(payload, summary)
+        self.assertIn("facility_profile", plan)
+        self.assertIn("学年別引率班と保護者引き渡し動線の整備", plan["acceptance"]["must_include"])
+        self.assertGreater(plan["acceptance"]["kpi_plan"]["targets"]["attendance_rate"], 0.9)
+        scenario = _build_scenario("job_facility", payload, storage=None, context_summary=summary)
+        self.assertIn("facility_profile", scenario["assets"])
+        self.assertIn("学級別名簿", scenario["assets"]["resource_checklist"])
+        timeline_desc = " ".join(step.get("description", "") for step in scenario["assets"]["timeline"])
+        self.assertIn("校内放送", timeline_desc)
+        safety = _build_safety(payload, scenario["assets"], summary)
+        issues_joined = " ".join(issue.get("issue", "") for issue in safety["issues"])
+        self.assertIn("児童引き渡し計画", issues_joined)
 
 
 if __name__ == "__main__":  # pragma: no cover

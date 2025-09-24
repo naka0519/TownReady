@@ -27,28 +27,13 @@
 - [ ] **高度安全レビュー**: 生成物の静的解析と KB スコアリングを組み合わせた指摘エンジンを実装。自治体チェックリスト JSON で網羅判定。
 - [ ] **KPI 永続化 & ダッシュボード**: Webhook を Firestore/BigQuery に保存し、Next.js 側に KPI 可視化＋再提案ロジックを実装。
 - [ ] **Imagen/Veo 本生成**: 生成 API 呼び出しと署名 URL 配布、字幕生成、コスト制御をワークフローに統合。
+  > **進捗メモ（2025-09-24）**: Vertex AI ImageGeneration (`imagegeneration@006`) を Cloud Run Worker から呼び出し、ポスター生成と署名 URL 配布を実装済み。動画生成は本リリースでは未実装とし、UI からは動画リンクを撤去した。
 
 ### フェーズC: 品質と拡張性 (P2)
 - [ ] **信頼性改善**: Pub/Sub publish 失敗のリトライ/通知、Firestore 更新のトランザクション化、Error Reporting 連携。
 - [ ] **CI/CD 強化**: Contract・E2E・Imagen/Veo テストを Cloud Build に組み込み、Gemini 有効/無効のマトリクスを自動検証。
 - [ ] **観測性ダッシュボード**: 署名 URL 再発行・キュー遅延・失敗率を Cloud Monitoring で可視化。
 - [ ] **拡張アーキテクチャ**: Webhook を Cloud Tasks 化、KPI/改善提案を BigQuery/Looker Studio に輸出。
-
-## 4. カンバン (着手状況)
-| ID | フェーズ | タスク | 担当 | 状況 | 予定完了 |
-| --- | --- | --- | --- | --- | --- |
-| A-1 | A | 地域データ連携基盤 | TBD | 進行中 | TBD |
-| A-2 | A | Plan/Scenario 生成強化 | TBD | 未着手 | TBD |
-| A-3 | A | ユースケースプリセット実装 | TBD | 未着手 | TBD |
-| A-4 | A | KB 同期自動化 | TBD | 未着手 | TBD |
-| B-1 | B | Scenario 出力構造化 | TBD | 未着手 | TBD |
-| B-2 | B | 高度安全レビュー | TBD | 未着手 | TBD |
-| B-3 | B | KPI 永続化/可視化 | TBD | 未着手 | TBD |
-| B-4 | B | Imagen/Veo 本生成 | TBD | 未着手 | TBD |
-| C-1 | C | 信頼性改善セット | TBD | 未着手 | TBD |
-| C-2 | C | CI/CD 強化 | TBD | 未着手 | TBD |
-| C-3 | C | 観測性ダッシュボード | TBD | 未着手 | TBD |
-| C-4 | C | 拡張アーキテクチャ整備 | TBD | 未着手 | TBD |
 
 ## 5. 運用ルール
 - 進捗更新はスプリント終了時および主要マイルストン完了時に実施し、`docs/SPRINT_PLAN.md` と整合させる。
@@ -96,6 +81,11 @@
 - `kb/region_context/index.json` を整備し、RegionContextStore が catalog 参照で多地域へスケールできるようにした（`derive_key` で job への格納可）。
 - `tests/test_region_context_store.py` で catalog 解決を検証し、CI 向けに `scripts/payloads/*.json` を追加して schema バリデーションを並列化。
 - `services/storage_client.upload_text` で UTF-8 エンコードを強制し、Worker の成果物（script.md / roles.csv / routes.json）を日本語で生成するよう統一。roles.csv は BOM 付き UTF-8 に揃え、日本語の文字化けを解消。
+
+#### A-1 進捗（2025-09-24）
+- `RegionContextStore` に Firestore キャッシュ連携と JSON フォールバック処理を実装し、住所一致失敗や GCS 欠損時でも `fallback` コンテキストを合成できるようにした。API 側では `region_context_ref` とスナップショットを Firestore `jobs/{id}` に保存し、Worker が再取得なしで差分を適用できる構成に変更。
+- `scripts/region_context_sync.py` を新設し、ローカル `kb/region_context` から GCS へのアップロードと Firestore への import を自動化。`--dry-run` で差分検証が可能になり、カタログ更新手順を標準化した。
+- 欠損フォールバックと facility profile を含むシナリオ差分を `tests/test_plan_scenario.py` に追加し、CI で地域差分回帰を検知できるようにした。
 - **残タスク (A-1)**
   - 行政界クリップをセントロイド判定から厳密な polygon intersection へ置き換え。
   - 津波以外のハザード（高潮・J-SHIS 地震動など）を追加取り込みし `hazard_scores` を拡充。
@@ -133,6 +123,11 @@
 - Markdown 台本へ `Local Risk Highlights` / `地域特有の注意` を挿入し、洪水・急傾斜ハイライトを成果物に反映。成果物 (`output/script.md` 等) で確認済み。
 - flood / landslide ハイライトが実環境で確認済み。残課題（行政界 intersection / 追加ハザード）は A-1 と連携して継続。
 - **残タスク (A-2)**
-  - RegionContext のキャッシュ欠損時にフォールバック台本へ地域差分を乗せるロジックとテストを追加。
-  - プリセット別 KPI/導線テンプレを UI とプロンプトに統合し、Plan/Scenario の差別化を高める。
-  - 生成物の差分テスト（JSON Schema＋サンプル住所）を CI へ組み込み、Gemini 有効/無効の両系統をカバーする。
+  - プリセットの対象地域/施設を追加し、実データベースと突合する検証フローを整備。
+  - Facility profile を含めた Plan/Scenario の差分テスト（JSON Schema＋サンプル住所）を CI へ組み込み、Gemini 有効/無効の両系統をカバーする。
+  - API/Worker 間で facility profile を Firestore キャッシュ化し、ジョブ履歴から再生成できる仕組みを整備する。
+
+#### A-2 進捗（2025-09-24）
+- Next.js フォームに `web/src/data/facilityPresets.ts` を追加し、自治会館・市立学校・商業施設など公開データリンク付きプリセットを選択即時に反映できるよう改善。選択中プリセットの KPI 目標・導線重点・資機材フォーカスを UI で提示するようにした。
+- API が `facility_profile` を Firestore に保存し、Worker が Plan/Scenario/Safety で KPI 目標・ハイライト・資機材リストを補強するよう拡張。フォールバックとプリセット差分のユニットテストを追加し、Gemini 無効時でも構造化出力が担保されるようにした。
+- ジョブ詳細画面を刷新し、署名 URL の自動再発行・QR 表示に加えて、facility profile の KPI/導線情報を確認できるカード UI を提供。公開データの URL を横浜市オープンデータポータルの最新リンクへ更新。

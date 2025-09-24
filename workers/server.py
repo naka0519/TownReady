@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import base64
 import json
-from typing import Any, Dict, List
+import os
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 import time
 import random
 
 from fastapi import FastAPI, HTTPException, Header
 import logging
-from typing import Optional
 
 try:
     from google.oauth2 import id_token as google_id_token
@@ -19,6 +19,7 @@ except Exception:  # pragma: no cover - libs should be present via google-cloud 
 
 try:
     from GCP_AI_Agent_hackathon.services import JobsStore, Settings, Storage, Publisher, RegionContextStore
+    from GCP_AI_Agent_hackathon.services.media_generation import MediaGenerator  # type: ignore
     from GCP_AI_Agent_hackathon.services.gemini_client import Gemini  # type: ignore
 except Exception:
     import sys
@@ -26,6 +27,10 @@ except Exception:
 
     sys.path.append(str(Path(__file__).resolve().parents[1]))
     from services import JobsStore, Settings, Storage, Publisher, RegionContextStore  # type: ignore
+    try:
+        from services.media_generation import MediaGenerator  # type: ignore
+    except Exception:  # pragma: no cover
+        MediaGenerator = None  # type: ignore
     try:
         from services.gemini_client import Gemini  # type: ignore
     except Exception:  # pragma: no cover
@@ -72,25 +77,149 @@ HAZARD_ROLE_APPEND_JA: Dict[str, Tuple[str, str, str]] = {
 }
 
 
+def _split_address_components(address: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    """Best-effort extraction of prefecture/city/ward from a Japanese address."""
+
+    if not isinstance(address, str) or not address.strip():
+        return None, None, None
+    address = address.strip()
+    pref_suffixes = ["都", "道", "府", "県"]
+    prefecture = None
+    city = None
+    ward = None
+    remainder = address
+    for suffix in pref_suffixes:
+        idx = remainder.find(suffix)
+        if idx != -1:
+            prefecture = remainder[: idx + 1]
+            remainder = remainder[idx + 1 :]
+            break
+    municipal_markers = ["市", "町", "村", "郡"]
+    for marker in municipal_markers:
+        idx = remainder.find(marker)
+        if idx != -1:
+            city = remainder[: idx + 1]
+            remainder = remainder[idx + 1 :]
+            break
+    idx_ward = remainder.find("区")
+    if idx_ward != -1:
+        ward = remainder[: idx_ward + 1]
+    return prefecture, city, ward
+
+
+def _fallback_region_context(job_payload: Dict[str, Any], store: Optional[RegionContextStore]) -> Dict[str, Any]:
+    location = job_payload.get("location") or {}
+    hazard_spec = job_payload.get("hazard") or {}
+    hazard_types = [str(h) for h in (hazard_spec.get("types") or []) if h]
+    address = str(location.get("address", "")).strip()
+    prefecture, city, ward = _split_address_components(address)
+
+    hazard_scores: Dict[str, Dict[str, Any]] = {}
+    highlights: List[str] = []
+    hazards_detail: Dict[str, Dict[str, Any]] = {}
+
+    def _append_highlight(tag: str) -> None:
+        if tag not in highlights:
+            highlights.append(tag)
+
+    for htype in hazard_types:
+        label = HAZARD_LABEL_JA.get(htype, htype)
+        base_entry = {"source": "fallback", "basis": "input_hazard"}
+        hazards_detail[htype] = base_entry
+        if htype == "flood":
+            hazard_scores["flood_plan"] = {
+                "confidence": 0.35,
+                "basis": "input_hazard",
+            }
+            _append_highlight(f"洪水: 入力ハザードに基づき高台・止水板の確認が必要です ({label})")
+        elif htype == "landslide":
+            hazard_scores["landslide"] = {
+                "confidence": 0.3,
+                "basis": "input_hazard",
+            }
+            _append_highlight("急傾斜地や盛土付近の立入禁止ラインを設定してください")
+        elif htype == "tsunami":
+            hazard_scores["tsunami"] = {
+                "confidence": 0.3,
+                "basis": "input_hazard",
+            }
+            _append_highlight("海抜と垂直避難ルートの確認を必須事項として共有してください")
+        else:
+            hazard_scores[htype] = {"confidence": 0.25, "basis": "input_hazard"}
+            _append_highlight(f"{label} の対策を強化する必要があります")
+
+    meta: Dict[str, Any] = {"source": "fallback"}
+    region_context_ref = job_payload.get("region_context_ref")
+    if region_context_ref:
+        meta["region_context_id"] = region_context_ref
+    elif store is not None:
+        try:
+            derived = store.derive_key(location)
+            if derived:
+                meta["region_context_id"] = derived
+        except Exception:
+            pass
+    if address:
+        meta.setdefault("address_hint", address)
+
+    region_info: Dict[str, Any] = {}
+    if prefecture:
+        region_info["prefecture"] = prefecture
+    if city:
+        region_info["city"] = city
+    if ward:
+        region_info["ward"] = ward
+
+    return {
+        "region": region_info if region_info else {},
+        "hazard_scores": hazard_scores,
+        "hazards": hazards_detail,
+        "highlights": highlights,
+        "meta": meta,
+    }
+
+
 def _load_region_context(job_payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    explicit = job_payload.get("region_context") or job_payload.get("region_context_snapshot")
+    if isinstance(explicit, dict):
+        meta = explicit.setdefault("meta", {}) if isinstance(explicit, dict) else {}
+        if isinstance(meta, dict):
+            meta.setdefault("source", meta.get("source", "payload"))
+        return explicit
     try:
         store = RegionContextStore()
-        location = job_payload.get("location") or {}
-        context = store.load_for_location(location)
-        if isinstance(context, dict):
-            meta = context.setdefault("meta", {})
-            if not meta.get("region_context_id"):
-                key = store.derive_key(location)
-                if key:
-                    meta["region_context_id"] = key
-        return context
     except Exception:
-        return None
+        # Store initialization failed; fallback only
+        return _fallback_region_context(job_payload, None)
+
+    location = job_payload.get("location") or {}
+    context: Optional[Dict[str, Any]] = None
+    try:
+        context = store.load_for_location(location)
+    except Exception:
+        context = None
+    if not context:
+        ref = job_payload.get("region_context_ref")
+        if ref:
+            context = store.load_by_id(ref)
+    if not context:
+        return _fallback_region_context(job_payload, store)
+    meta = context.setdefault("meta", {}) if isinstance(context, dict) else {}
+    if isinstance(meta, dict):
+        if not meta.get("region_context_id"):
+            fallback_key = job_payload.get("region_context_ref") or store.derive_key(location)
+            if fallback_key:
+                meta["region_context_id"] = fallback_key
+        meta.setdefault("source", meta.get("source", "catalog"))
+    return context
 
 
 def _plan_context_summary(region_ctx: Dict[str, Any]) -> Dict[str, Any]:
     scores = region_ctx.get("hazard_scores") or {}
     notes: List[str] = []
+    if isinstance(region_ctx.get("highlights"), list):
+        highlights = [str(item) for item in region_ctx.get("highlights") if isinstance(item, str)]
+        notes.extend(highlights)
     flood = scores.get("flood_plan") or {}
     if flood:
         max_depth = flood.get("max_depth_m")
@@ -109,14 +238,22 @@ def _plan_context_summary(region_ctx: Dict[str, Any]) -> Dict[str, Any]:
     region_info = region_ctx.get("region") if isinstance(region_ctx, dict) else None
     if isinstance(region_meta, dict) and region_meta.get("region_context_id"):
         summary["region_context_id"] = region_meta.get("region_context_id")
+    if isinstance(region_meta, dict) and region_meta.get("source"):
+        summary["source"] = region_meta.get("source")
     if isinstance(region_info, dict):
         summary["region"] = {
             key: val
             for key, val in region_info.items()
             if key in ("prefecture", "city", "ward") and val
         }
-    if notes:
-        summary["highlights"] = notes
+    merged_notes: List[str] = []
+    seen = set()
+    for note in notes:
+        if note and note not in seen:
+            merged_notes.append(note)
+            seen.add(note)
+    if merged_notes:
+        summary["highlights"] = merged_notes
     return summary
 
 
@@ -361,6 +498,38 @@ def _augment_scenario_assets(
     checklist = _build_resource_checklist(context_summary, hazard_types)
     if not assets.get("resource_checklist"):
         assets["resource_checklist"] = checklist
+    facility_profile = job_payload.get("facility_profile") or {}
+    if facility_profile:
+        assets.setdefault("facility_profile", facility_profile)
+        resource_focus = facility_profile.get("resource_focus") or facility_profile.get("resourceFocus") or []
+        if isinstance(resource_focus, list):
+            for item in resource_focus:
+                if isinstance(item, str) and item and item not in assets["resource_checklist"]:
+                    assets["resource_checklist"].append(item)
+        timeline_focus = facility_profile.get("timeline_focus") or facility_profile.get("timelineFocus") or []
+        if isinstance(timeline_focus, list):
+            base_timeline = assets.get("timeline") or []
+            if not base_timeline:
+                assets["timeline"] = _build_timeline(context_summary, hazard_types)
+                base_timeline = assets.get("timeline") or []
+            offset = 120
+            for idx, focus in enumerate(timeline_focus):
+                if isinstance(focus, str) and focus:
+                    base_timeline.append(
+                        {
+                            "step": f"施設重点 {idx + 1}",
+                            "timestamp_offset_sec": offset + idx * 60,
+                            "description": focus,
+                        }
+                    )
+        highlights = assets.get("highlights") or []
+        additions = facility_profile.get("acceptance_additions") or facility_profile.get("acceptance") or []
+        if isinstance(additions, list):
+            for item in additions:
+                if isinstance(item, str) and item and item not in highlights:
+                    highlights.append(item)
+        if highlights:
+            assets["highlights"] = highlights
 
 
 def _inject_highlights_into_script(
@@ -427,21 +596,22 @@ def _build_plan(
 ) -> Dict[str, Any]:
     # Optional Gemini generation (staged via env)
     try:
-        settings = Settings.load()
-        if getattr(settings, "use_gemini", False) and Gemini is not None:
-            g = Gemini(settings)
-            payload_for_model = dict(job_payload)
-            if context_summary:
-                payload_for_model = dict(payload_for_model)
-                payload_for_model["region_context"] = context_summary
-            raw = g.generate_plan(payload_for_model)
-            # normalize minimal keys
-            scenarios = raw.get("scenarios") or []
-            acceptance = raw.get("acceptance") or {}
-            handoff = raw.get("handoff") or {"to": "Scenario Agent", "with": {}}
-            plan = {"scenarios": scenarios, "acceptance": acceptance, "handoff": handoff}
-            _augment_plan_payload(plan, context_summary)
-            return plan
+        if Gemini is not None and str(os.getenv("GEMINI_ENABLED", "false")).lower() in {"1", "true", "yes", "on"}:
+            settings = Settings.load()
+            if getattr(settings, "use_gemini", False):
+                g = Gemini(settings)
+                payload_for_model = dict(job_payload)
+                if context_summary:
+                    payload_for_model = dict(payload_for_model)
+                    payload_for_model["region_context"] = context_summary
+                raw = g.generate_plan(payload_for_model)
+                # normalize minimal keys
+                scenarios = raw.get("scenarios") or []
+                acceptance = raw.get("acceptance") or {}
+                handoff = raw.get("handoff") or {"to": "Scenario Agent", "with": {}}
+                plan = {"scenarios": scenarios, "acceptance": acceptance, "handoff": handoff}
+                _augment_plan_payload(plan, context_summary)
+                return plan
     except Exception as e:
         logger.exception("gemini_plan_failed: %s", e)
     loc = job_payload.get("location", {})
@@ -499,6 +669,32 @@ def _build_plan(
         tip = HAZARD_ACCEPTANCE_TIPS.get(hazard_type)
         if tip and tip not in acceptance_list:
             acceptance_list.append(tip)
+    facility_profile = job_payload.get("facility_profile") or {}
+    facility_acceptance = facility_profile.get("acceptance_additions") or facility_profile.get("acceptance") or []
+    if isinstance(facility_acceptance, list):
+        for item in facility_acceptance:
+            if isinstance(item, str) and item.strip() and item not in acceptance_list:
+                acceptance_list.append(item.strip())
+    facility_kpi = facility_profile.get("kpi_targets") or facility_profile.get("kpiTargets")
+    if isinstance(facility_kpi, dict):
+        att = facility_kpi.get("attendanceRate") or facility_kpi.get("attendance_rate")
+        evac = facility_kpi.get("avgEvacTimeSec") or facility_kpi.get("avg_evac_time_sec")
+        quiz = facility_kpi.get("quizScore") or facility_kpi.get("quiz_score")
+        if att is not None:
+            try:
+                kpi["targets"]["attendance_rate"] = float(att)
+            except Exception:
+                pass
+        if evac is not None:
+            try:
+                kpi["targets"]["avg_evac_time_sec"] = int(evac)
+            except Exception:
+                pass
+        if quiz is not None:
+            try:
+                kpi["targets"]["quiz_score"] = float(quiz)
+            except Exception:
+                pass
     hazard_scores: Dict[str, Any] = context_summary.get("hazard_scores", {}) if context_summary else {}
     acceptance = {"must_include": acceptance_list, "kpi_plan": kpi}
     plan_highlights: List[str] = []
@@ -508,6 +704,14 @@ def _build_plan(
         tip = HAZARD_ACCEPTANCE_TIPS.get(hazard_type)
         if tip and tip not in plan_highlights:
             plan_highlights.append(tip)
+    facility_timeline = facility_profile.get("timeline_focus") or facility_profile.get("timelineFocus") or []
+    if isinstance(facility_timeline, list):
+        for focus in facility_timeline:
+            if isinstance(focus, str) and focus not in plan_highlights:
+                plan_highlights.append(focus)
+    facility_description = facility_profile.get("description")
+    if isinstance(facility_description, str) and facility_description and facility_description not in plan_highlights:
+        plan_highlights.append(facility_description)
     plan = {
         "scenarios": scenarios,
         "acceptance": acceptance,
@@ -516,6 +720,8 @@ def _build_plan(
     }
     if plan_highlights:
         plan["highlights"] = plan_highlights
+    if facility_profile:
+        plan["facility_profile"] = facility_profile
     _augment_plan_payload(plan, context_summary)
     return plan
 
@@ -528,52 +734,53 @@ def _build_scenario(
 ) -> Dict[str, Any]:
     # Optional Gemini generation (staged via env)
     try:
-        settings = Settings.load()
-        if getattr(settings, "use_gemini", False) and Gemini is not None:
-            g = Gemini(settings)
-            payload_for_model = dict(job_payload)
-            if context_summary:
-                payload_for_model = dict(payload_for_model)
-                payload_for_model["region_context"] = context_summary
-            raw = g.generate_scenario(payload_for_model) or {}
-            assets_in = raw.get("assets") or raw
-            routes = assets_in.get("routes") or []
-            langs = assets_in.get("languages") or (job_payload.get("participants", {}).get("languages") or ["ja"])
-            hazard_types = [str(t) for t in (job_payload.get("hazard", {}).get("types") or [])]
-            script_md = _generate_japanese_script(job_payload.get("location", {}), hazard_types)
-            roles_csv = _generate_japanese_roles(hazard_types)
-            assets: Dict[str, Any] = {"script_md": script_md, "roles_csv": roles_csv, "routes": routes, "languages": langs}
-            if context_summary:
-                assets["context"] = context_summary
-            assets.setdefault("timeline", _build_timeline(context_summary, hazard_types))
-            assets.setdefault("resource_checklist", _build_resource_checklist(context_summary, hazard_types))
-            _augment_scenario_assets(assets, job_payload, context_summary)
-            highlights_g = list(context_summary.get("highlights", []) if context_summary else [])
-            hazard_tips = [HAZARD_ACCEPTANCE_TIPS.get(ht) for ht in hazard_types if HAZARD_ACCEPTANCE_TIPS.get(ht)]
-            for tip in hazard_tips:
-                if tip and tip not in highlights_g:
-                    highlights_g.append(tip)
-            if highlights_g and isinstance(assets.get("script_md"), str):
-                primary_lang = langs[0] if isinstance(langs, list) and langs else "ja"
-                assets["script_md"] = _inject_highlights_into_script(assets["script_md"], highlights_g, primary_lang)
-                script_md = assets["script_md"]
-            if highlights_g and not assets.get("highlights"):
-                assets["highlights"] = highlights_g
-            if storage:
-                script_path = f"jobs/{job_id}/script.md"
-                roles_path = f"jobs/{job_id}/roles.csv"
-                routes_path = f"jobs/{job_id}/routes.json"
-                assets["script_md_uri"] = storage.upload_text(script_path, script_md, "text/markdown")
-                assets["roles_csv_uri"] = storage.upload_text(roles_path, roles_csv, "text/csv")
-                assets["routes_json_uri"] = storage.upload_text(routes_path, json.dumps(routes, ensure_ascii=False, indent=2), "application/json")
-                try:
-                    settings2 = Settings.load()
-                    assets["script_md_url"] = storage.signed_url(script_path, ttl_seconds=settings2.signed_url_ttl, download_name="script.md")
-                    assets["roles_csv_url"] = storage.signed_url(roles_path, ttl_seconds=settings2.signed_url_ttl, download_name="roles.csv")
-                    assets["routes_json_url"] = storage.signed_url(routes_path, ttl_seconds=settings2.signed_url_ttl, download_name="routes.json")
-                except Exception as se:  # pragma: no cover
-                    logger.exception("signed_url_failed_scenario_gemini: %s", se)
-            return {"type": "scenario", "assets": assets}
+        if Gemini is not None and str(os.getenv("GEMINI_ENABLED", "false")).lower() in {"1", "true", "yes", "on"}:
+            settings = Settings.load()
+            if getattr(settings, "use_gemini", False):
+                g = Gemini(settings)
+                payload_for_model = dict(job_payload)
+                if context_summary:
+                    payload_for_model = dict(payload_for_model)
+                    payload_for_model["region_context"] = context_summary
+                raw = g.generate_scenario(payload_for_model) or {}
+                assets_in = raw.get("assets") or raw
+                routes = assets_in.get("routes") or []
+                langs = assets_in.get("languages") or (job_payload.get("participants", {}).get("languages") or ["ja"])
+                hazard_types = [str(t) for t in (job_payload.get("hazard", {}).get("types") or [])]
+                script_md = _generate_japanese_script(job_payload.get("location", {}), hazard_types)
+                roles_csv = _generate_japanese_roles(hazard_types)
+                assets: Dict[str, Any] = {"script_md": script_md, "roles_csv": roles_csv, "routes": routes, "languages": langs}
+                if context_summary:
+                    assets["context"] = context_summary
+                assets.setdefault("timeline", _build_timeline(context_summary, hazard_types))
+                assets.setdefault("resource_checklist", _build_resource_checklist(context_summary, hazard_types))
+                _augment_scenario_assets(assets, job_payload, context_summary)
+                highlights_g = list(context_summary.get("highlights", []) if context_summary else [])
+                hazard_tips = [HAZARD_ACCEPTANCE_TIPS.get(ht) for ht in hazard_types if HAZARD_ACCEPTANCE_TIPS.get(ht)]
+                for tip in hazard_tips:
+                    if tip and tip not in highlights_g:
+                        highlights_g.append(tip)
+                if highlights_g and isinstance(assets.get("script_md"), str):
+                    primary_lang = langs[0] if isinstance(langs, list) and langs else "ja"
+                    assets["script_md"] = _inject_highlights_into_script(assets["script_md"], highlights_g, primary_lang)
+                    script_md = assets["script_md"]
+                if highlights_g and not assets.get("highlights"):
+                    assets["highlights"] = highlights_g
+                if storage:
+                    script_path = f"jobs/{job_id}/script.md"
+                    roles_path = f"jobs/{job_id}/roles.csv"
+                    routes_path = f"jobs/{job_id}/routes.json"
+                    assets["script_md_uri"] = storage.upload_text(script_path, script_md, "text/markdown")
+                    assets["roles_csv_uri"] = storage.upload_text(roles_path, roles_csv, "text/csv")
+                    assets["routes_json_uri"] = storage.upload_text(routes_path, json.dumps(routes, ensure_ascii=False, indent=2), "application/json")
+                    try:
+                        settings2 = Settings.load()
+                        assets["script_md_url"] = storage.signed_url(script_path, ttl_seconds=settings2.signed_url_ttl, download_name="script.md")
+                        assets["roles_csv_url"] = storage.signed_url(roles_path, ttl_seconds=settings2.signed_url_ttl, download_name="roles.csv")
+                        assets["routes_json_url"] = storage.signed_url(routes_path, ttl_seconds=settings2.signed_url_ttl, download_name="routes.json")
+                    except Exception as se:  # pragma: no cover
+                        logger.exception("signed_url_failed_scenario_gemini: %s", se)
+                return {"type": "scenario", "assets": assets}
     except Exception as e:
         logger.exception("gemini_scenario_failed: %s", e)
     loc = job_payload.get("location", {})
@@ -606,6 +813,8 @@ def _build_scenario(
     }
     if context_summary:
         assets["context"] = context_summary
+    _augment_scenario_assets(assets, job_payload, context_summary)
+    highlights = assets.get("highlights", highlights)
     by_lang: Dict[str, Any] = {}
     primary = (langs[0] if len(langs) else "ja")
     if storage:
@@ -666,11 +875,17 @@ def _build_scenario(
     return {"type": "scenario", "assets": assets}
 
 
-def _build_safety(job_payload: Dict[str, Any], scenario_assets: Dict[str, Any]) -> Dict[str, Any]:
+def _build_safety(
+    job_payload: Dict[str, Any],
+    scenario_assets: Dict[str, Any],
+    context_summary: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     issues: List[Dict[str, Any]] = []
     parts = job_payload.get("participants", {})
     hazard = job_payload.get("hazard", {})
     cons = job_payload.get("constraints", {})
+    hazard_scores = (context_summary or {}).get("hazard_scores", {})
+    region_highlights = list((context_summary or {}).get("highlights", []) or [])
     if (parts.get("elderly", 0) + parts.get("wheelchair", 0)) > 0:
         issues.append({
             "severity": "low",
@@ -692,6 +907,68 @@ def _build_safety(job_payload: Dict[str, Any], scenario_assets: Dict[str, Any]) 
             "fix": "消火器使用時は退避線を設定",
             "kb": "kb://fire_extinguisher",
         })
+    if hazard_scores.get("flood_plan"):
+        max_depth = hazard_scores["flood_plan"].get("max_depth_m")
+        issues.append({
+            "severity": "medium",
+            "issue": "浸水想定区域での導線安全確認",
+            "fix": "止水板設置、浸水想定箇所のバリケード設置、避難経路の高台切替手順を明文化",
+            "detail": {"max_depth_m": max_depth, "source": hazard_scores["flood_plan"].get("basis", "context")},
+            "kb": "kb://flood_response",
+        })
+    if hazard_scores.get("landslide"):
+        issues.append({
+            "severity": "medium",
+            "issue": "急傾斜地・土砂崩れ警戒区域の立入制限",
+            "fix": "危険区域の巡回頻度と立入禁止ライン、避難誘導員の追加配置を検討",
+            "detail": hazard_scores["landslide"],
+            "kb": "kb://landslide_guideline",
+        })
+    if hazard_scores.get("tsunami"):
+        issues.append({
+            "severity": "high",
+            "issue": "津波警戒時の垂直避難体制",
+            "fix": "屋上鍵の管理・避難誘導役割・避難開始目標時刻を明記",
+            "detail": hazard_scores["tsunami"],
+            "kb": "kb://tsunami_vertical_evac",
+        })
+    if region_highlights:
+        issues.append({
+            "severity": "info",
+            "issue": "地域特有のリスク共有",
+            "fix": "訓練冒頭で以下の地域ハイライトを共有し、役割表と導線に反映",
+            "highlights": region_highlights,
+        })
+    facility_profile = job_payload.get("facility_profile") or {}
+    if isinstance(facility_profile, dict) and facility_profile.get("category"):
+        category = facility_profile.get("category")
+        source_title = None
+        if isinstance(facility_profile.get("source"), dict):
+            source_title = facility_profile.get("source", {}).get("title")
+        if category == "school":
+            issues.append({
+                "severity": "high",
+                "issue": "児童引き渡し計画と学年別誘導の確認",
+                "fix": "学年別引率班・保護者連絡網・防災倉庫開錠手順を事前に演習",
+                "kb": "kb://school_evacuation",
+                "source": source_title,
+            })
+        elif category == "commercial":
+            issues.append({
+                "severity": "medium",
+                "issue": "テナント一斉通報と来客避難の動線確保",
+                "fix": "テナント責任者の集合基準・館内放送・エレベータ停止手順をマニュアル化",
+                "kb": "kb://commercial_complex",
+                "source": source_title,
+            })
+        elif category == "community":
+            issues.append({
+                "severity": "medium",
+                "issue": "自治会要配慮者リストの更新",
+                "fix": "介助役割の割当とバリアフリー導線の安全確認を毎回実施",
+                "kb": "kb://community_support",
+                "source": source_title,
+            })
     # Best-effort: attach KB anchors for each issue
     try:
         try:
@@ -712,7 +989,10 @@ def _build_safety(job_payload: Dict[str, Any], scenario_assets: Dict[str, Any]) 
     except Exception:
         pass
 
-    return {"type": "safety", "issues": issues, "patched": True}
+    result: Dict[str, Any] = {"type": "safety", "issues": issues, "patched": True}
+    if context_summary:
+        result["context"] = context_summary
+    return result
 
 
 def _build_content(job_payload: Dict[str, Any], scenario_assets: Dict[str, Any], storage: Optional[Storage], job_id: str) -> Dict[str, Any]:
@@ -730,6 +1010,10 @@ def _build_content(job_payload: Dict[str, Any], scenario_assets: Dict[str, Any],
     ]
     uris: Dict[str, Any] = {}
     by_lang: Dict[str, Any] = {}
+    try:
+        media_generator: Optional[MediaGenerator] = MediaGenerator()
+    except Exception:
+        media_generator = None
     if storage:
         # Load settings for signed URL TTL and filename hints
         try:
@@ -776,6 +1060,56 @@ def _build_content(job_payload: Dict[str, Any], scenario_assets: Dict[str, Any],
                     logger.exception("content_lang_signed_failed: job=%s lang=%s err=%s", job_id, lang, e)
         except Exception as e:
             logger.exception("signed_url_failed_content: error=%s", e)
+    media_bundle: Dict[str, Any]
+    if media_generator and storage:
+        primary_poster_prompt = poster_prompts[0] if poster_prompts else video_prompt
+        try:
+            media_bundle = media_generator.generate_media_bundle(job_id, primary_poster_prompt, video_prompt, storage)
+        except Exception as exc:
+            media_bundle = {
+                "poster": {"status": "error", "reason": str(exc)},
+                "video": {"status": "error", "reason": str(exc)},
+                "total_cost": 0.0,
+            }
+    else:
+        status = "disabled" if media_generator else "unavailable"
+        media_bundle = {
+            "poster": {"status": status},
+            "video": {"status": status},
+            "total_cost": 0.0,
+        }
+    uris["media_generation"] = media_bundle
+    poster_asset = media_bundle.get("poster", {}) if isinstance(media_bundle, dict) else {}
+    poster_asset_uri = poster_asset.get("uri") if isinstance(poster_asset, dict) else None
+    if poster_asset_uri:
+        uris["poster_asset_uri"] = poster_asset_uri
+    video_asset = media_bundle.get("video", {}) if isinstance(media_bundle, dict) else {}
+    video_asset_uri = video_asset.get("uri") if isinstance(video_asset, dict) else None
+    if video_asset_uri:
+        uris["video_asset_uri"] = video_asset_uri
+    def _signed_url_for(uri: Optional[str], default_name: str) -> Optional[str]:
+        if not storage or not uri or not isinstance(uri, str):
+            return None
+        prefix = f"gs://{storage.bucket.name}/"
+        if not uri.startswith(prefix):
+            return None
+        rel_path = uri[len(prefix):]
+        download_name = rel_path.split('/')[-1] or default_name
+        try:
+            ttl = settings.signed_url_ttl if 'settings' in locals() else Settings.load().signed_url_ttl
+        except Exception:
+            ttl = 3600
+        try:
+            return storage.signed_url(rel_path, ttl_seconds=ttl, download_name=download_name)
+        except Exception as exc:
+            logger.exception("media_signed_url_failed: job=%s path=%s err=%s", job_id, rel_path, exc)
+            return None
+    poster_asset_url = _signed_url_for(poster_asset_uri, "poster.png")
+    if poster_asset_url:
+        uris["poster_asset_url"] = poster_asset_url
+    video_asset_url = _signed_url_for(video_asset_uri, "video.mp4")
+    if video_asset_url:
+        uris["video_asset_url"] = video_asset_url
     uris["by_language"] = by_lang
     return {"type": "content", "poster_prompts": poster_prompts, "video_prompt": video_prompt, "video_shotlist": shotlist, **uris}
 @app.post("/pubsub/push")
@@ -848,7 +1182,7 @@ def pubsub_push(body: Dict[str, Any], authorization: Optional[str] = Header(defa
             result = _build_scenario(job_id, job_payload, storage, context_summary)
         elif task == "safety":
             scenario_assets = (job_doc.get("assets") or {}) or ((job_doc.get("result") or {}).get("assets") or {})
-            result = _build_safety(job_payload, scenario_assets)
+            result = _build_safety(job_payload, scenario_assets, context_summary)
         elif task == "content":
             scenario_assets = (job_doc.get("assets") or {}) or ((job_doc.get("result") or {}).get("assets") or {})
             result = _build_content(job_payload, scenario_assets, storage, job_id)

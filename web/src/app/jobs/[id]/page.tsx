@@ -40,6 +40,16 @@ export default function JobPage(props: { params: { id: string } }) {
   const content = useMemo(() => (doc?.results?.content) || (doc?.result?.type==='content' && doc?.result) || {}, [doc]);
   const safety = useMemo(() => (doc?.results?.safety) || (doc?.result?.type==='safety' && doc?.result) || {}, [doc]);
 
+  const mediaGeneration = useMemo(() => (content?.media_generation || {}), [content]);
+  const posterBundle = (mediaGeneration?.poster as any) || {};
+  const posterAssetUrl = content?.poster_asset_url as string | undefined;
+  const posterAssetUri = content?.poster_asset_uri as string | undefined;
+  const totalMediaCost = typeof (mediaGeneration as any).total_cost === 'number' ? (mediaGeneration as any).total_cost : undefined;
+  const posterStatus = posterBundle.status || (posterAssetUrl ? 'generated' : 'unavailable');
+  const posterCost = typeof posterBundle.cost === 'number' ? posterBundle.cost : undefined;
+  const posterReason = typeof posterBundle.reason === 'string' ? posterBundle.reason : undefined;
+  const posterPreview = posterAssetUrl ? /\.(png|jpg|jpeg|gif|webp)(\?|$)/i.test(posterAssetUrl) : false;
+
   const copy = async (txt: string) => {
     try { await navigator.clipboard.writeText(txt); alert('URLをコピーしました'); } catch { alert('コピーに失敗しました'); }
   };
@@ -71,7 +81,7 @@ export default function JobPage(props: { params: { id: string } }) {
     const cooldown = 60 * 1000;
     if (now - lastAutoRefreshAt < cooldown) return;
     const urls: string[] = [];
-    [assets?.script_md_url, assets?.roles_csv_url, assets?.routes_json_url, content?.poster_prompts_url, content?.video_prompt_url, content?.video_shotlist_url]
+    [assets?.script_md_url, assets?.roles_csv_url, assets?.routes_json_url, content?.poster_prompts_url, content?.poster_asset_url]
       .forEach((u: any) => { if (typeof u === 'string') urls.push(u); });
     const hasExpired = urls.some(u => expiresIn(u) === '(expired)');
     if (hasExpired) {
@@ -85,7 +95,7 @@ export default function JobPage(props: { params: { id: string } }) {
       })();
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [assets?.script_md_url, assets?.roles_csv_url, assets?.routes_json_url, content?.poster_prompts_url, content?.video_prompt_url, content?.video_shotlist_url]);
+  }, [assets?.script_md_url, assets?.roles_csv_url, assets?.routes_json_url, content?.poster_prompts_url, content?.poster_asset_url]);
 
   const toggleQr = (key: string) => setShowQr(prev => ({ ...prev, [key]: !prev[key] }));
 
@@ -189,71 +199,37 @@ export default function JobPage(props: { params: { id: string } }) {
         </div>
       )}
       <h4>Content</h4>
-      <ul>
-        {content.poster_prompts_url && (
-          <li>
-            <a target="_blank" href={content.poster_prompts_url} download>poster_prompts.txt</a>
-            &nbsp;<small>{expiresIn(content.poster_prompts_url)}</small>
-            &nbsp;<button onClick={() => copy(content.poster_prompts_url)}>コピー</button>
-            &nbsp;<button aria-label="poster_prompts のQRを表示" onClick={() => toggleQr('poster_prompts_url')}>QR</button>
-            {showQr['poster_prompts_url'] && <div><img alt="poster_prompts QR" src={qrSrc(content.poster_prompts_url)} /></div>}
-          </li>
-        )}
-        {content.video_prompt_url && (
-          <li>
-            <a target="_blank" href={content.video_prompt_url} download>video_prompt.txt</a>
-            &nbsp;<small>{expiresIn(content.video_prompt_url)}</small>
-            &nbsp;<button onClick={() => copy(content.video_prompt_url)}>コピー</button>
-            &nbsp;<button aria-label="video_prompt のQRを表示" onClick={() => toggleQr('video_prompt_url')}>QR</button>
-            {showQr['video_prompt_url'] && <div><img alt="video_prompt QR" src={qrSrc(content.video_prompt_url)} /></div>}
-          </li>
-        )}
-        {content.video_shotlist_url && (
-          <li>
-            <a target="_blank" href={content.video_shotlist_url} download>video_shotlist.json</a>
-            &nbsp;<small>{expiresIn(content.video_shotlist_url)}</small>
-            &nbsp;<button onClick={() => copy(content.video_shotlist_url)}>コピー</button>
-            &nbsp;<button aria-label="video_shotlist のQRを表示" onClick={() => toggleQr('video_shotlist_url')}>QR</button>
-            {showQr['video_shotlist_url'] && <div><img alt="video_shotlist QR" src={qrSrc(content.video_shotlist_url)} /></div>}
-          </li>
-        )}
-        {!content.poster_prompts_url && !content.video_prompt_url && !content.video_shotlist_url && <li>（なし）</li>}
-      </ul>
-      {content.by_language && (
-        <div>
-          <h5>Content (per language)</h5>
-          {Object.keys(content.by_language || {}).map((lang: string) => {
-            const it = (content.by_language as any)[lang] || {};
-            return (
-              <div key={lang} style={{ marginBottom: 8 }}>
-                <b>{lang}</b>
-                <ul>
-                  {it.poster_prompts_url && (
-                    <li>
-                      <a target="_blank" href={it.poster_prompts_url} download>{`poster_prompts_${lang}.txt`}</a>
-                      &nbsp;<small>{expiresIn(it.poster_prompts_url)}</small>
-                      &nbsp;<button onClick={() => copy(it.poster_prompts_url)}>コピー</button>
-                    </li>
-                  )}
-                  {it.video_prompt_url && (
-                    <li>
-                      <a target="_blank" href={it.video_prompt_url} download>{`video_prompt_${lang}.txt`}</a>
-                      &nbsp;<small>{expiresIn(it.video_prompt_url)}</small>
-                      &nbsp;<button onClick={() => copy(it.video_prompt_url)}>コピー</button>
-                    </li>
-                  )}
-                  {it.video_shotlist_url && (
-                    <li>
-                      <a target="_blank" href={it.video_shotlist_url} download>{`video_shotlist_${lang}.json`}</a>
-                      &nbsp;<small>{expiresIn(it.video_shotlist_url)}</small>
-                      &nbsp;<button onClick={() => copy(it.video_shotlist_url)}>コピー</button>
-                    </li>
-                  )}
-                </ul>
+      <div style={{ display: 'grid', gap: 16, marginBottom: 16, gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))' }}>
+        <div style={{ border: '1px solid #ddd', borderRadius: 8, padding: 12, background: '#fff' }}>
+          <h5 style={{ marginTop: 0 }}>ポスター</h5>
+          <div>ステータス: <code>{posterStatus}</code></div>
+          {posterCost !== undefined && <div>コスト: ${posterCost.toFixed(2)}</div>}
+          {posterReason && <div style={{ color: '#6c757d', fontSize: 12 }}>メモ: {posterReason}</div>}
+          {posterAssetUrl ? (
+            <div style={{ marginTop: 8 }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <a target="_blank" href={posterAssetUrl} download>ダウンロード</a>
+                <small>{expiresIn(posterAssetUrl)}</small>
+                <button onClick={() => copy(posterAssetUrl)}>コピー</button>
+                <button aria-label="ポスターURLのQRを表示" onClick={() => toggleQr('poster_asset_url')}>QR</button>
               </div>
-            );
-          })}
+              {showQr['poster_asset_url'] && <div><img alt="poster asset QR" src={qrSrc(posterAssetUrl)} /></div>}
+              {posterPreview && (
+                <div style={{ marginTop: 8 }}>
+                  <img src={posterAssetUrl} alt="生成ポスター" style={{ maxWidth: '100%', borderRadius: 6, border: '1px solid #eee' }} />
+                </div>
+              )}
+              {posterAssetUri && posterAssetUri.startsWith('gs://') && (
+                <div style={{ marginTop: 6, fontSize: 11, color: '#6c757d' }}>{posterAssetUri}</div>
+              )}
+            </div>
+          ) : (
+            <p style={{ color: '#888', marginTop: 8 }}>ダウンロード可能なポスターはまだありません。</p>
+          )}
         </div>
+      </div>
+      {typeof totalMediaCost === 'number' && (
+        <div style={{ marginBottom: 16, color: '#444' }}>メディア累計コスト: ${totalMediaCost.toFixed(2)}</div>
       )}
       <h4>Safety issues</h4>
       <ul>
@@ -272,8 +248,6 @@ export default function JobPage(props: { params: { id: string } }) {
         ))}
         {!(safety?.issues||[]).length && <li>（なし）</li>}
       </ul>
-      <h4>Raw</h4>
-      <pre style={{ whiteSpace: 'pre-wrap' }}>{doc ? JSON.stringify(doc, null, 2) : '...'}</pre>
     </div>
   );
 }

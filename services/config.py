@@ -39,6 +39,14 @@ class Settings:
     vai_location: str
     gemini_timeout_sec: int
     gemini_max_retries: int
+    use_imagen: bool
+    use_veo: bool
+    media_budget_usd: float
+    media_cost_image: float
+    media_cost_video: float
+    kpi_firestore_collection: str
+    bigquery_dataset: Optional[str]
+    bigquery_table: Optional[str]
 
     @staticmethod
     def load() -> "Settings":
@@ -74,6 +82,23 @@ class Settings:
             gemini_max_retries = int(os.getenv("GEMINI_MAX_RETRIES", "2"))
         except Exception:
             gemini_max_retries = 2
+        use_imagen = str(os.getenv("IMAGEN_ENABLED", "false")).lower() in {"1", "true", "yes", "on"}
+        use_veo = str(os.getenv("VEO_ENABLED", "false")).lower() in {"1", "true", "yes", "on"}
+        try:
+            media_budget_usd = float(os.getenv("MEDIA_MAX_COST_USD", "1.0"))
+        except Exception:
+            media_budget_usd = 1.0
+        try:
+            media_cost_image = float(os.getenv("MEDIA_COST_IMAGE_USD", "0.02"))
+        except Exception:
+            media_cost_image = 0.02
+        try:
+            media_cost_video = float(os.getenv("MEDIA_COST_VIDEO_USD", "0.2"))
+        except Exception:
+            media_cost_video = 0.2
+        kpi_firestore_collection = os.getenv("KPI_COLLECTION", "kpi_events")
+        bigquery_dataset = os.getenv("BIGQUERY_DATASET") or None
+        bigquery_table = os.getenv("BIGQUERY_TABLE") or None
 
         if not project:
             raise RuntimeError("GCP_PROJECT is not set in environment")
@@ -98,4 +123,12 @@ class Settings:
             vai_location=vai_location,
             gemini_timeout_sec=gemini_timeout_sec,
             gemini_max_retries=gemini_max_retries,
+            use_imagen=use_imagen,
+            use_veo=use_veo,
+            media_budget_usd=media_budget_usd,
+            media_cost_image=media_cost_image,
+            media_cost_video=media_cost_video,
+            kpi_firestore_collection=kpi_firestore_collection,
+            bigquery_dataset=bigquery_dataset,
+            bigquery_table=bigquery_table,
         )

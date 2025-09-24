@@ -2,82 +2,118 @@
 
 import { useMemo, useState } from 'react';
 
+import { FACILITY_PRESETS, FacilityPreset, getPresetById } from '../data/facilityPresets';
+
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || '';
 
-type Preset = {
-  id: string;
-  label: string;
-  data?: {
-    address: string;
-    lat: number;
-    lng: number;
-    languages: string[];
-    hazards: string[];
-  };
+type ConstraintsState = {
+  maxDurationMin?: number;
+  limitedOutdoor?: boolean;
 };
 
-const PRESETS: Preset[] = [
-  { id: 'custom', label: 'カスタム入力' },
-  {
-    id: 'community-center',
-    label: '地域センター',
-    data: {
-      address: '神奈川県横浜市戸塚区上倉田町８８４−１',
-      lat: 35.3985,
-      lng: 139.5372,
-      languages: ['ja', 'en'],
-      hazards: ['earthquake', 'flood']
-    }
-  },
-  {
-    id: 'river-hospital',
-    label: '川沿い病院',
-    data: {
-      address: '神奈川県横浜市戸塚区吉田町５７９−１',
-      lat: 35.4053,
-      lng: 139.5378,
-      languages: ['ja', 'en'],
-      hazards: ['earthquake', 'fire']
-    }
+type ParticipantsState = {
+  total: number;
+  children: number;
+  elderly: number;
+  wheelchair: number;
+};
+
+function buildFacilityProfilePayload(preset: FacilityPreset | undefined) {
+  if (!preset) {
+    return undefined;
   }
-];
+  return {
+    id: preset.id,
+    label: preset.label,
+    category: preset.category,
+    kpi_targets: preset.profile.kpiTargets,
+    acceptance_additions: preset.profile.acceptance,
+    timeline_focus: preset.profile.timelineFocus,
+    resource_focus: preset.profile.resourceFocus,
+    description: preset.description,
+  };
+}
 
 export default function Home() {
-  const defaultPreset = PRESETS.find(p => p.id === 'community-center') ?? PRESETS[0];
-  const initialData = defaultPreset.data;
-  const [presetId, setPresetId] = useState<string>(defaultPreset.id);
-  const [address, setAddress] = useState(initialData ? initialData.address : '');
-  const [lat, setLat] = useState(initialData ? String(initialData.lat) : '');
-  const [lng, setLng] = useState(initialData ? String(initialData.lng) : '');
-  const [langs, setLangs] = useState(initialData ? initialData.languages.join(',') : 'ja,en');
-  const [hazards, setHazards] = useState(initialData ? initialData.hazards.join(',') : 'earthquake,fire');
+  const defaultPreset = FACILITY_PRESETS[0];
+  const defaultForm = defaultPreset?.form;
+  const [presetId, setPresetId] = useState<string>(defaultPreset?.id ?? 'custom');
+  const [address, setAddress] = useState(defaultForm ? defaultForm.address : '');
+  const [lat, setLat] = useState(defaultForm ? String(defaultForm.lat) : '');
+  const [lng, setLng] = useState(defaultForm ? String(defaultForm.lng) : '');
+  const [langs, setLangs] = useState(defaultForm ? defaultForm.languages.join(',') : 'ja,en');
+  const [hazards, setHazards] = useState(defaultForm ? defaultForm.hazardTypes.join(',') : 'earthquake,fire');
+  const [participants, setParticipants] = useState<ParticipantsState>(
+    defaultForm
+      ? {
+          total: defaultForm.participants.total,
+          children: defaultForm.participants.children,
+          elderly: defaultForm.participants.elderly,
+          wheelchair: defaultForm.participants.wheelchair,
+        }
+      : { total: 100, children: 10, elderly: 10, wheelchair: 2 }
+  );
+  const [constraints, setConstraints] = useState<ConstraintsState>(
+    defaultForm?.constraints ?? { maxDurationMin: 45, limitedOutdoor: true }
+  );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
+  const selectedPreset = useMemo<FacilityPreset | undefined>(() => getPresetById(presetId), [presetId]);
+  const facilityProfilePayload = useMemo(() => buildFacilityProfilePayload(selectedPreset), [selectedPreset]);
+
   const applyPreset = (id: string) => {
     setPresetId(id);
-    const preset = PRESETS.find(p => p.id === id);
-    if (!preset || !preset.data) {
+    const preset = getPresetById(id);
+    if (!preset) {
+      setParticipants({ total: 100, children: 10, elderly: 10, wheelchair: 2 });
+      setConstraints({ maxDurationMin: 45, limitedOutdoor: true });
       return;
     }
-    const data = preset.data;
+    const data = preset.form;
     setAddress(data.address);
     setLat(String(data.lat));
     setLng(String(data.lng));
     setLangs(data.languages.join(','));
-    setHazards(data.hazards.join(','));
+    setHazards(data.hazardTypes.join(','));
+    setParticipants({
+      total: data.participants.total,
+      children: data.participants.children,
+      elderly: data.participants.elderly,
+      wheelchair: data.participants.wheelchair,
+    });
+    setConstraints(data.constraints ?? {});
   };
 
   const submit = async () => {
     try {
       setLoading(true);
       setError('');
+      const hazardTypes = hazards
+        .split(',')
+        .map(s => s.trim())
+        .filter(Boolean);
       const payload = {
         location: { address, lat: parseFloat(lat), lng: parseFloat(lng) },
-        participants: { total: 100, children: 10, elderly: 10, wheelchair: 2, languages: langs.split(',').map(s=>s.trim()).filter(Boolean) },
-        hazard: { types: hazards.split(',').map(s=>s.trim()).filter(Boolean), drill_date: '2025-10-12', indoor: true, nighttime: false },
-        constraints: { max_duration_min: 45, limited_outdoor: true },
-        kb_refs: []
+        participants: {
+          total: participants.total,
+          children: participants.children,
+          elderly: participants.elderly,
+          wheelchair: participants.wheelchair,
+          languages: langs.split(',').map(s => s.trim()).filter(Boolean),
+        },
+        hazard: {
+          types: hazardTypes,
+          drill_date: '2025-10-12',
+          indoor: !constraints.limitedOutdoor,
+          nighttime: false,
+        },
+        constraints: {
+          max_duration_min: constraints.maxDurationMin,
+          limited_outdoor: constraints.limitedOutdoor,
+        },
+        kb_refs: [],
+        facility_profile: presetId !== 'custom' ? facilityProfilePayload : undefined,
       };
       const endpoint = API_BASE ? `${API_BASE}/api/generate/plan` : `/api/generate/plan`;
       const res = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
@@ -95,7 +131,7 @@ export default function Home() {
   };
 
   const apiLabel = API_BASE ? API_BASE : '(via Next proxy)';
-  const presetOptions = useMemo(() => PRESETS, []);
+  const presetOptions = useMemo(() => [{ id: 'custom', label: 'カスタム入力' }, ...FACILITY_PRESETS.map(p => ({ id: p.id, label: p.label }))], []);
   return (
     <div>
       <h3>新規ジョブの開始</h3>
@@ -149,6 +185,13 @@ export default function Home() {
             style={{ width: '100%', padding: 6 }}
           />
         </label>
+        <div style={{ fontSize: 13, background: '#f5f5f5', padding: 10, borderRadius: 6 }}>
+          <div style={{ fontWeight: 600, marginBottom: 4 }}>参加者構成</div>
+          <div>総数: {participants.total} 名 / 子ども: {participants.children} / 高齢者: {participants.elderly} / 車椅子: {participants.wheelchair}</div>
+          {constraints.maxDurationMin && (
+            <div>訓練目安時間: {constraints.maxDurationMin} 分 / 屋外制限: {constraints.limitedOutdoor ? 'あり' : 'なし'}</div>
+          )}
+        </div>
         <button onClick={submit} disabled={loading} style={{ padding: '8px 12px' }}>{loading ? '起動中...' : '開始'}</button>
         {error && (
           <div style={{ color: '#c33', whiteSpace: 'pre-wrap', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 12 }}>
@@ -156,6 +199,42 @@ export default function Home() {
           </div>
         )}
       </div>
+      {selectedPreset && (
+        <section style={{ marginTop: 24, padding: 12, border: '1px solid #ddd', borderRadius: 8, maxWidth: 520 }}>
+          <h4 style={{ margin: '0 0 8px', fontSize: 16 }}>{selectedPreset.label} 向け推奨 KPI / 導線</h4>
+          <p style={{ margin: '0 0 8px', fontSize: 13 }}>{selectedPreset.description}</p>
+          <dl style={{ margin: 0, fontSize: 13 }}>
+            <dt style={{ fontWeight: 600 }}>KPI 目標値</dt>
+            <dd style={{ margin: '0 0 6px 0' }}>
+              出席率 {Math.round(selectedPreset.profile.kpiTargets.attendanceRate * 100)}% / 平均避難 {selectedPreset.profile.kpiTargets.avgEvacTimeSec} 秒 / クイズ達成率 {Math.round(selectedPreset.profile.kpiTargets.quizScore * 100)}%
+            </dd>
+            <dt style={{ fontWeight: 600 }}>受け入れ必須項目</dt>
+            <dd style={{ margin: '0 0 6px 0' }}>
+              <ul style={{ margin: 0, paddingLeft: 18 }}>
+                {selectedPreset.profile.acceptance.map(item => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ul>
+            </dd>
+            <dt style={{ fontWeight: 600 }}>タイムライン重点</dt>
+            <dd style={{ margin: '0 0 6px 0' }}>
+              <ul style={{ margin: 0, paddingLeft: 18 }}>
+                {selectedPreset.profile.timelineFocus.map(item => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ul>
+            </dd>
+            <dt style={{ fontWeight: 600 }}>重点資機材</dt>
+            <dd style={{ margin: '0 0 6px 0' }}>
+              <ul style={{ margin: 0, paddingLeft: 18 }}>
+                {selectedPreset.profile.resourceFocus.map(item => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ul>
+            </dd>
+          </dl>
+        </section>
+      )}
     </div>
   );
 }

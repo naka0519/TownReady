@@ -24,6 +24,15 @@ class JobsStore:
             "created_at": now,
             "updated_at": now,
         }
+        region_ref = payload.get("region_context_ref") if isinstance(payload, dict) else None
+        if region_ref:
+            doc["region_context_ref"] = region_ref
+        snapshot = payload.get("region_context_snapshot") if isinstance(payload, dict) else None
+        if snapshot:
+            doc["region_context_snapshot"] = snapshot
+        facility_profile = payload.get("facility_profile") if isinstance(payload, dict) else None
+        if facility_profile:
+            doc["facility_profile"] = facility_profile
         self.col.document(job_id).set(doc)
         return job_id
 
@@ -41,4 +50,3 @@ class JobsStore:
         doc = snap.to_dict() or {}
         doc["job_id"] = job_id
         return doc
-

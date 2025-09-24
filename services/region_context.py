@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -11,6 +12,13 @@ try:  # Optional dependency; required when REGION_CONTEXT_DIR points to GCS.
     from google.cloud import storage  # type: ignore
 except Exception:  # pragma: no cover - google libs may be absent locally
     storage = None  # type: ignore
+
+try:  # Optional dependency for Firestore-backed cache.
+    from google.cloud import firestore  # type: ignore
+except Exception:  # pragma: no cover - firetore libs may be absent locally
+    firestore = None  # type: ignore
+
+from .config import Settings
 
 
 @dataclass
@@ -103,6 +111,9 @@ class RegionContextStore:
         else:
             self.base_dir_path = Path(base)
         self._index_override = str(index_path) if index_path is not None else os.getenv("REGION_CONTEXT_INDEX")
+        self._firestore_client: Optional[Any] = None
+        self._firestore_collection = os.getenv("REGION_CONTEXT_COLLECTION", "regions")
+        self._firestore_unavailable = False
 
     def _resolve_base(self) -> Path:
         base = getattr(self, "base_dir_path", None)
@@ -267,36 +278,28 @@ class RegionContextStore:
 
     def load_for_location(self, location: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         catalog_entry = self._match_catalog_entry(location)
-        filename: Optional[str] = None
         if catalog_entry is not None:
-            filename = catalog_entry.path
-        else:
-            legacy_key = self._match_legacy_entry(location)
-            if legacy_key:
-                filename = f"{legacy_key}.json" if not legacy_key.endswith(".json") else legacy_key
-
+            context = self._load_entry_context(catalog_entry)
+            if context:
+                return context
+        legacy_key = self._match_legacy_entry(location)
+        filename: Optional[str] = None
+        if legacy_key:
+            filename = f"{legacy_key}.json" if not legacy_key.endswith(".json") else legacy_key
         if not filename:
             return None
         try:
             context = self._load_json(filename)
         except FileNotFoundError:
-            return None
+            context = None
         except Exception:
+            context = None
+        if not context:
             return None
-
         meta = context.setdefault("meta", {}) if isinstance(context, dict) else {}
-        if catalog_entry is not None:
-            meta.setdefault("region_context_id", catalog_entry.id)
-            meta.setdefault(
-                "region_context_catalog",
-                {
-                    "path": catalog_entry.path,
-                    "keywords": catalog_entry.keywords,
-                    "bbox": catalog_entry.bbox,
-                    "hazards": catalog_entry.hazards,
-                    "municipal_code": catalog_entry.municipal_code,
-                },
-            )
+        if isinstance(meta, dict):
+            meta.setdefault("region_context_id", legacy_key)
+            meta.setdefault("source", meta.get("source", "legacy_map"))
         return context
 
     def derive_key(self, location: Dict[str, Any]) -> Optional[str]:
@@ -307,3 +310,129 @@ class RegionContextStore:
         if legacy_key:
             return legacy_key
         return None
+
+    def _firestore(self) -> Optional[Any]:
+        if self._firestore_unavailable:
+            return None
+        if firestore is None:
+            self._firestore_unavailable = True
+            return None
+        if self._firestore_client is not None:
+            return self._firestore_client
+        try:
+            settings = Settings.load()
+            self._firestore_client = firestore.Client(project=settings.project, database=settings.firestore_db)  # type: ignore[attr-defined]
+            return self._firestore_client
+        except Exception:
+            self._firestore_unavailable = True
+            return None
+
+    def _load_from_firestore(self, doc_id: str) -> Optional[Dict[str, Any]]:
+        if not doc_id:
+            return None
+        client = self._firestore()
+        if client is None:
+            return None
+        try:
+            snap = client.collection(self._firestore_collection).document(doc_id).get()  # type: ignore[attr-defined]
+        except Exception:
+            return None
+        if not getattr(snap, "exists", False):
+            return None
+        data = snap.to_dict() or {}
+        if isinstance(data, dict) and "context" in data and isinstance(data["context"], dict):
+            context = data["context"]
+        else:
+            context = data
+        if isinstance(context, dict):
+            meta = context.setdefault("meta", {}) if isinstance(context, dict) else {}
+            if isinstance(meta, dict):
+                meta.setdefault("region_context_id", doc_id)
+                meta.setdefault("source", "firestore_cache")
+        return context if isinstance(context, dict) else None
+
+    def _load_entry_context(self, entry: _CatalogEntry) -> Optional[Dict[str, Any]]:
+        context: Optional[Dict[str, Any]] = None
+        try:
+            context = self._load_json(entry.path)
+        except FileNotFoundError:
+            context = None
+        except Exception:
+            context = None
+        if not context and entry.id:
+            context = self._load_from_firestore(entry.id)
+        if not context:
+            return None
+        meta = context.setdefault("meta", {}) if isinstance(context, dict) else {}
+        if isinstance(meta, dict):
+            if entry.id:
+                meta.setdefault("region_context_id", entry.id)
+            meta.setdefault(
+                "region_context_catalog",
+                {
+                    "path": entry.path,
+                    "keywords": entry.keywords,
+                    "bbox": entry.bbox,
+                    "hazards": entry.hazards,
+                    "municipal_code": entry.municipal_code,
+                },
+            )
+        return context
+
+    def load_by_id(self, region_id: str) -> Optional[Dict[str, Any]]:
+        if not region_id:
+            return None
+        for entry in self._load_catalog():
+            if entry.id == region_id:
+                return self._load_entry_context(entry)
+        # Not present in catalog; attempt Firestore cache directly
+        context = self._load_from_firestore(region_id)
+        if context and isinstance(context, dict):
+            meta = context.setdefault("meta", {}) if isinstance(context, dict) else {}
+            if isinstance(meta, dict):
+                meta.setdefault("region_context_id", region_id)
+                meta.setdefault("source", meta.get("source", "firestore_cache"))
+        return context
+
+    def list_catalog(self) -> List[Dict[str, Any]]:
+        catalog = []
+        for entry in self._load_catalog():
+            catalog.append(
+                {
+                    "id": entry.id,
+                    "path": entry.path,
+                    "keywords": list(entry.keywords),
+                    "bbox": list(entry.bbox) if entry.bbox else None,
+                    "centroid": list(entry.centroid) if entry.centroid else None,
+                    "slugs": list(entry.slugs),
+                    "hazards": list(entry.hazards),
+                    "preferred_names": list(entry.preferred_names),
+                    "municipal_code": entry.municipal_code,
+                }
+            )
+        return catalog
+
+    def sync_to_firestore(self, *, collection: Optional[str] = None) -> List[str]:
+        client = self._firestore()
+        if client is None:
+            raise RuntimeError("Firestore client is unavailable; ensure google-cloud-firestore is installed and credentials are configured")
+        col_name = collection or self._firestore_collection
+        saved: List[str] = []
+        for entry in self._load_catalog():
+            if not entry.path:
+                continue
+            context = self._load_entry_context(entry)
+            if not context:
+                continue
+            context_copy = json.loads(json.dumps(context, ensure_ascii=False))
+            meta = context_copy.setdefault("meta", {}) if isinstance(context_copy, dict) else {}
+            if isinstance(meta, dict):
+                meta.setdefault("synced_at", int(time.time()))
+                meta.setdefault("source", meta.get("source", "filesystem"))
+            doc_id = entry.id or Path(entry.path).stem
+            try:
+                client.collection(col_name).document(doc_id).set(context_copy)  # type: ignore[attr-defined]
+                saved.append(doc_id)
+            except Exception:
+                continue
+        return saved
