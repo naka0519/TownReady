@@ -1000,7 +1000,39 @@ def _build_content(job_payload: Dict[str, Any], scenario_assets: Dict[str, Any],
     hazard = job_payload.get("hazard", {})
     langs: List[str] = parts.get("languages") or ["ja"]
     types: List[str] = hazard.get("types") or []
-    poster_prompts = [f"{','.join(types)} 対応の避難誘導ポスター（{lang}）" for lang in langs]
+    style_choice = str(job_payload.get("poster_style") or "低コントラスト写真風")
+    raw_brand_colors = job_payload.get("brand_colors")
+    if isinstance(raw_brand_colors, str):
+        brand_color_candidates = [raw_brand_colors]
+    elif isinstance(raw_brand_colors, list):
+        brand_color_candidates = [str(c) for c in raw_brand_colors]
+    else:
+        brand_color_candidates = []
+    brand_color_text = ",".join(c.strip() for c in brand_color_candidates if c and str(c).strip()) or "緑"
+    location_info = job_payload.get("location", {})
+    hazard_text = ",".join(types) if types else "複合災害"
+    base_prompt_template = (
+        "目的: 避難訓練ポスターの背景画像を作る。後工程で文字とQRを合成する。\n"
+        "テーマ: 「参加しやすい・安心・地域で助け合う」。\n"
+        "禁止: 災害の恐怖表現、瓦礫、負傷、炎、洪水の直接描写、過度な緊迫感、文字のベタ描き。\n"
+        "大枠: A3 縦 / 300DPI / 印刷想定。\n"
+        "構図: 上=見出し余白、中央=イメージ、下=情報欄余白。視線誘導の緩やかなS字。\n"
+        "スタイル: {style_choice}。\n"
+        "被写体: 一般的な街並み、誘導サイン、集会所や公園、子ども連れや高齢者、車椅子ユーザーが一緒に歩ける歩道。\n"
+        "色: {brand_colors}（色弱対応・高コントラスト）/ 背景は淡い、情報欄は無地に近い。\n"
+        "余白: 上50mm, 右中段80×120mm, 下60mm（概ねで良い）。\n"
+        "照明: 明るく安心、柔らかい日中光。\n"
+        "トーン: 前向き、参加しやすい、恐怖心を煽らない。\n"
+        "想定ハザード: {hazard_text}。\n"
+    )
+    poster_prompts = [
+        base_prompt_template.format(
+            style_choice=style_choice,
+            brand_colors=brand_color_text,
+            hazard_text=hazard_text,
+        )
+        for _ in langs
+    ]
     video_prompt = f"{','.join(types)} 訓練の60秒VTR（多言語）"
     shotlist = [
         {"description": "集合・点呼の様子", "duration_sec": 10},

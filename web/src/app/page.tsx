@@ -56,6 +56,8 @@ export default function Home() {
   const [constraints, setConstraints] = useState<ConstraintsState>(
     defaultForm?.constraints ?? { maxDurationMin: 45, limitedOutdoor: true }
   );
+  const [posterStyle, setPosterStyle] = useState('低コントラスト写真風');
+  const [brandColors, setBrandColors] = useState('緑');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -68,6 +70,8 @@ export default function Home() {
     if (!preset) {
       setParticipants({ total: 100, children: 10, elderly: 10, wheelchair: 2 });
       setConstraints({ maxDurationMin: 45, limitedOutdoor: true });
+      setPosterStyle('低コントラスト写真風');
+      setBrandColors('緑');
       return;
     }
     const data = preset.form;
@@ -83,6 +87,8 @@ export default function Home() {
       wheelchair: data.participants.wheelchair,
     });
     setConstraints(data.constraints ?? {});
+    setPosterStyle('低コントラスト写真風');
+    setBrandColors('緑');
   };
 
   const submit = async () => {
@@ -114,6 +120,8 @@ export default function Home() {
         },
         kb_refs: [],
         facility_profile: presetId !== 'custom' ? facilityProfilePayload : undefined,
+        poster_style: posterStyle,
+        brand_colors: brandColors.split(',').map(s => s.trim()).filter(Boolean),
       };
       const endpoint = API_BASE ? `${API_BASE}/api/generate/plan` : `/api/generate/plan`;
       const res = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
@@ -183,6 +191,22 @@ export default function Home() {
             value={hazards}
             onChange={e=>{ setPresetId('custom'); setHazards(e.target.value); }}
             style={{ width: '100%', padding: 6 }}
+          />
+        </label>
+        <label>ポスタースタイル
+          <input
+            value={posterStyle}
+            onChange={e=>{ setPresetId('custom'); setPosterStyle(e.target.value); }}
+            style={{ width: '100%', padding: 6 }}
+            placeholder="例: 低コントラスト写真風"
+          />
+        </label>
+        <label>ブランドカラー（カンマ区切り）
+          <input
+            value={brandColors}
+            onChange={e=>{ setPresetId('custom'); setBrandColors(e.target.value); }}
+            style={{ width: '100%', padding: 6 }}
+            placeholder="例: 緑,#1E88E5"
           />
         </label>
         <div style={{ fontSize: 13, background: '#f5f5f5', padding: 10, borderRadius: 6 }}>

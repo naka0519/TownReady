@@ -111,6 +111,14 @@ class GenerateBaseRequest(BaseModel):
         default=None,
         description="Preset facility metadata to tailor KPI/timeline",
     )
+    poster_style: Optional[str] = Field(
+        default=None,
+        description="Preferred visual style for poster generation (e.g., '低コントラスト写真風')",
+    )
+    brand_colors: Optional[List[str]] = Field(
+        default=None,
+        description="Brand color palette for poster generation (e.g., ['#1E88E5','#43A047'])",
+    )
 
 
 class LatLng(BaseModel):
