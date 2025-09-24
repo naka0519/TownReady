@@ -1,0 +1,43 @@
+{
+  "id": "community-hall",
+  "label": "地区公民館",
+  "category": "community",
+  "description": "地域住民が集う公民館での避難訓練用テンプレート。",
+  "form": {
+    "address": "神奈川県横浜市戸塚区吉田町200-1",
+    "lat": 35.4012,
+    "lng": 139.5341,
+    "languages": ["ja", "en"],
+    "hazardTypes": ["earthquake", "flood"],
+    "participants": {
+      "total": 150,
+      "children": 15,
+      "elderly": 30,
+      "wheelchair": 5,
+      "languages": ["ja", "en"]
+    },
+    "constraints": {
+      "maxDurationMin": 50,
+      "limitedOutdoor": true
+    }
+  },
+  "profile": {
+    "kpiTargets": {
+      "attendanceRate": 0.88,
+      "avgEvacTimeSec": 360,
+      "quizScore": 0.78
+    },
+    "acceptance": [
+      "高齢者・介助班のペアリング",
+      "止水板の設置手順を追加"
+    ],
+    "timelineFocus": [
+      "開始直後に要配慮者点呼と介助担当をアサイン",
+      "避難後に公民館倉庫の備蓄確認"
+    ],
+    "resourceFocus": [
+      "避難誘導ベストと LED ライト",
+      "多言語案内板と簡易スロープ"
+    ]
+  }
+}

@@ -5,6 +5,7 @@ import sys
 import types
 import unittest
 from pathlib import Path
+from typing import Any, Dict, Optional
 
 
 def _install_stubs() -> None:
@@ -169,6 +170,12 @@ class PlanScenarioFallbackTests(unittest.TestCase):
             },
         }
 
+    def _region_context(self, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        payload = payload or self._job_payload()
+        ctx = _load_region_context(payload)
+        self.assertIsNotNone(ctx)
+        return ctx or {}
+
     def test_build_plan_includes_hazard_highlights(self):
         payload = self._job_payload()
         context = {
@@ -189,18 +196,16 @@ class PlanScenarioFallbackTests(unittest.TestCase):
 
     def test_build_scenario_adds_flood_routes_and_roles(self):
         payload = self._job_payload()
-        context = {
-            "hazard_scores": {
-                "flood_plan": {"coverage_km2": 1.2},
-            },
-            "highlights": [],
-            "meta": {"region_context_id": "region-14110"},
-        }
-        summary = _plan_context_summary(context)
-        scenario = _build_scenario("job123", payload, storage=None, context_summary=summary)
+        region_ctx = self._region_context(payload)
+        summary = _plan_context_summary(region_ctx)
+        scenario = _build_scenario("job123", payload, storage=None, context_summary=summary, region_context=region_ctx)
         assets = scenario["assets"]
         route_names = {route["name"] for route in assets["routes"]}
         self.assertIn("高台避難導線", route_names)
+        high_routes = [route for route in assets["routes"] if route.get("name") == "高台避難導線"]
+        if high_routes:
+            destination_labels = [pt.get("label", "") for pt in high_routes[0].get("points", [])]
+            self.assertTrue(any("高台" in label or "避難" in label for label in destination_labels))
         self.assertIn("避難導線リーダー", assets["roles_csv"])
         self.assertIn("## ハザード別の重点確認", assets["script_md"])
         self.assertIn("止水板設置", "\n".join(assets["highlights"]))
@@ -217,7 +222,8 @@ class PlanScenarioFallbackTests(unittest.TestCase):
             "meta": {"region_context_id": "region-14110", "source": "test"},
         }
         summary = _plan_context_summary(context)
-        scenario = _build_scenario("job456", payload, storage=None, context_summary=summary)
+        region_ctx = self._region_context(payload)
+        scenario = _build_scenario("job456", payload, storage=None, context_summary=summary, region_context=region_ctx)
         safety = _build_safety(payload, scenario["assets"], context_summary=summary)
         self.assertEqual(safety.get("context", {}).get("source"), summary.get("source"))
         issues_joined = " ".join(issue.get("issue", "") for issue in safety["issues"])
@@ -243,7 +249,7 @@ class PlanScenarioFallbackTests(unittest.TestCase):
         self.assertEqual(summary.get("source"), "fallback")
         plan = _build_plan(payload, summary)
         self.assertIn("context", plan)
-        scenario = _build_scenario("job789", payload, storage=None, context_summary=summary)
+        scenario = _build_scenario("job789", payload, storage=None, context_summary=summary, region_context=context)
         self.assertIn("context", scenario["assets"])
         safety = _build_safety(payload, scenario["assets"], summary)
         self.assertEqual(safety.get("context", {}).get("source"), "fallback")
@@ -275,7 +281,8 @@ class PlanScenarioFallbackTests(unittest.TestCase):
         self.assertIn("facility_profile", plan)
         self.assertIn("学年別引率班と保護者引き渡し動線の整備", plan["acceptance"]["must_include"])
         self.assertGreater(plan["acceptance"]["kpi_plan"]["targets"]["attendance_rate"], 0.9)
-        scenario = _build_scenario("job_facility", payload, storage=None, context_summary=summary)
+        region_ctx = self._region_context(payload)
+        scenario = _build_scenario("job_facility", payload, storage=None, context_summary=summary, region_context=region_ctx)
         self.assertIn("facility_profile", scenario["assets"])
         self.assertIn("学級別名簿", scenario["assets"]["resource_checklist"])
         timeline_desc = " ".join(step.get("description", "") for step in scenario["assets"]["timeline"])

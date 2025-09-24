@@ -1,8 +1,8 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 
-import { FACILITY_PRESETS, FacilityPreset, getPresetById } from '../data/facilityPresets';
+import { FACILITY_PRESETS, FacilityPreset, FacilityPresetCategory } from '../data/facilityPresets';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || '';
 
@@ -60,13 +60,28 @@ export default function Home() {
   const [brandColors, setBrandColors] = useState('緑');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [customPresets, setCustomPresets] = useState<FacilityPreset[]>([]);
 
-  const selectedPreset = useMemo<FacilityPreset | undefined>(() => getPresetById(presetId), [presetId]);
+  const [newPresetLabel, setNewPresetLabel] = useState('新規プリセット');
+  const [newPresetCategory, setNewPresetCategory] = useState<FacilityPresetCategory>('community');
+  const [newPresetDescription, setNewPresetDescription] = useState('');
+  const [newAttendanceRate, setNewAttendanceRate] = useState('0.85');
+  const [newAvgEvacSec, setNewAvgEvacSec] = useState('360');
+  const [newQuizScore, setNewQuizScore] = useState('0.75');
+  const [newAcceptance, setNewAcceptance] = useState('');
+  const [newTimelineFocus, setNewTimelineFocus] = useState('');
+  const [newResourceFocus, setNewResourceFocus] = useState('');
+  const [presetMessage, setPresetMessage] = useState('');
+
+  const allPresets = useMemo(() => [...FACILITY_PRESETS, ...customPresets], [customPresets]);
+  const selectedPreset = useMemo<FacilityPreset | undefined>(() =>
+    allPresets.find(preset => preset.id === presetId)
+  , [allPresets, presetId]);
   const facilityProfilePayload = useMemo(() => buildFacilityProfilePayload(selectedPreset), [selectedPreset]);
 
-  const applyPreset = (id: string) => {
+  const applyPreset = useCallback((id: string) => {
     setPresetId(id);
-    const preset = getPresetById(id);
+    const preset = allPresets.find(p => p.id === id);
     if (!preset) {
       setParticipants({ total: 100, children: 10, elderly: 10, wheelchair: 2 });
       setConstraints({ maxDurationMin: 45, limitedOutdoor: true });
@@ -89,6 +104,77 @@ export default function Home() {
     setConstraints(data.constraints ?? {});
     setPosterStyle('低コントラスト写真風');
     setBrandColors('緑');
+  }, [allPresets]);
+
+  const presetOptions = useMemo(
+    () => [{ id: 'custom', label: 'カスタム入力' }, ...allPresets.map(p => ({ id: p.id, label: p.label }))],
+    [allPresets]
+  );
+
+  const safeFloat = (value: string, fallback: number) => {
+    const num = parseFloat(value);
+    return Number.isFinite(num) ? num : fallback;
+  };
+
+  const slugify = (label: string) => {
+    const base = label.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    return base || 'custom-preset';
+  };
+
+  const registerPreset = () => {
+    try {
+      const idBase = slugify(newPresetLabel);
+      let id = idBase;
+      let i = 1;
+      while (allPresets.some(p => p.id === id)) {
+        id = `${idBase}-${i++}`;
+      }
+      const languages = langs.split(',').map(s => s.trim()).filter(Boolean);
+      const acceptanceList = newAcceptance.split('\n').map(s => s.trim()).filter(Boolean);
+      const timelineList = newTimelineFocus.split('\n').map(s => s.trim()).filter(Boolean);
+      const resourceList = newResourceFocus.split('\n').map(s => s.trim()).filter(Boolean);
+      const newPreset: FacilityPreset = {
+        id,
+        label: newPresetLabel,
+        category: newPresetCategory,
+        description: newPresetDescription || 'カスタムプリセット',
+        form: {
+          address,
+          lat: parseFloat(lat),
+          lng: parseFloat(lng),
+          languages,
+          hazardTypes: hazards.split(',').map(s => s.trim()).filter(Boolean),
+          participants: {
+            total: participants.total,
+            children: participants.children,
+            elderly: participants.elderly,
+            wheelchair: participants.wheelchair,
+            languages,
+          },
+          constraints: {
+            maxDurationMin: constraints.maxDurationMin,
+            limitedOutdoor: constraints.limitedOutdoor,
+          },
+        },
+        profile: {
+          kpiTargets: {
+            attendanceRate: safeFloat(newAttendanceRate, 0.8),
+            avgEvacTimeSec: safeFloat(newAvgEvacSec, 360),
+            quizScore: safeFloat(newQuizScore, 0.7),
+          },
+          acceptance: acceptanceList,
+          timelineFocus: timelineList,
+          resourceFocus: resourceList,
+        },
+      };
+      setCustomPresets(prev => [...prev, newPreset]);
+      setPresetId(id);
+      setPresetMessage(`プリセット「${newPreset.label}」を追加しました`);
+      setTimeout(() => setPresetMessage(''), 4000);
+    } catch (err) {
+      setPresetMessage('プリセット登録に失敗しました');
+      setTimeout(() => setPresetMessage(''), 4000);
+    }
   };
 
   const submit = async () => {
@@ -139,7 +225,6 @@ export default function Home() {
   };
 
   const apiLabel = API_BASE ? API_BASE : '(via Next proxy)';
-  const presetOptions = useMemo(() => [{ id: 'custom', label: 'カスタム入力' }, ...FACILITY_PRESETS.map(p => ({ id: p.id, label: p.label }))], []);
   return (
     <div>
       <h3>新規ジョブの開始</h3>
@@ -259,6 +344,47 @@ export default function Home() {
           </dl>
         </section>
       )}
+      <section style={{ marginTop: 24, padding: 12, border: '1px solid #ddd', borderRadius: 8, maxWidth: 520 }}>
+        <h4 style={{ margin: '0 0 8px' }}>プリセット登録</h4>
+        <p style={{ fontSize: 13, margin: '0 0 8px' }}>現在の入力値をベースにプリセットを追加できます。リストへの追加のみで、ファイルへの保存は行いません。</p>
+        <div style={{ display: 'grid', gap: 8 }}>
+          <label>プリセット名
+            <input value={newPresetLabel} onChange={e => setNewPresetLabel(e.target.value)} style={{ width: '100%', padding: 6 }} />
+          </label>
+          <label>カテゴリ
+            <select value={newPresetCategory} onChange={e => setNewPresetCategory(e.target.value as FacilityPresetCategory)} style={{ width: '100%', padding: 6 }}>
+              <option value="community">community</option>
+              <option value="school">school</option>
+              <option value="commercial">commercial</option>
+            </select>
+          </label>
+          <label>説明
+            <textarea value={newPresetDescription} onChange={e => setNewPresetDescription(e.target.value)} style={{ width: '100%', minHeight: 60, padding: 6 }} />
+          </label>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <label style={{ flex: 1 }}>出席率
+              <input value={newAttendanceRate} onChange={e => setNewAttendanceRate(e.target.value)} style={{ width: '100%', padding: 6 }} />
+            </label>
+            <label style={{ flex: 1 }}>平均避難秒
+              <input value={newAvgEvacSec} onChange={e => setNewAvgEvacSec(e.target.value)} style={{ width: '100%', padding: 6 }} />
+            </label>
+            <label style={{ flex: 1 }}>クイズ達成率
+              <input value={newQuizScore} onChange={e => setNewQuizScore(e.target.value)} style={{ width: '100%', padding: 6 }} />
+            </label>
+          </div>
+          <label>受け入れ必須項目（1 行 1 項目）
+            <textarea value={newAcceptance} onChange={e => setNewAcceptance(e.target.value)} style={{ width: '100%', minHeight: 60, padding: 6 }} />
+          </label>
+          <label>タイムライン重点（1 行 1 項目）
+            <textarea value={newTimelineFocus} onChange={e => setNewTimelineFocus(e.target.value)} style={{ width: '100%', minHeight: 60, padding: 6 }} />
+          </label>
+          <label>重点資機材（1 行 1 項目）
+            <textarea value={newResourceFocus} onChange={e => setNewResourceFocus(e.target.value)} style={{ width: '100%', minHeight: 60, padding: 6 }} />
+          </label>
+          <button type="button" onClick={registerPreset} style={{ padding: '8px 12px' }}>プリセットに追加</button>
+          {presetMessage && <div style={{ color: '#2b8a3e', fontSize: 12 }}>{presetMessage}</div>}
+        </div>
+      </section>
     </div>
   );
 }
