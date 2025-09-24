@@ -45,14 +45,14 @@ export const FACILITY_PRESETS: FacilityPreset[] = [
       address: '神奈川県横浜市戸塚区吉田町１０４−１ 戸塚地区センター',
       lat: 35.4011,
       lng: 139.5345,
-      languages: ['ja', 'en', 'zh'],
+      languages: ['ja', 'en'],
       hazardTypes: ['flood', 'landslide'],
       participants: {
         total: 80,
         children: 5,
         elderly: 28,
         wheelchair: 4,
-        languages: ['ja', 'en', 'zh'],
+        languages: ['ja', 'en'],
       },
       constraints: {
         maxDurationMin: 45,

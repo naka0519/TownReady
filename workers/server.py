@@ -1012,7 +1012,7 @@ def _build_content(job_payload: Dict[str, Any], scenario_assets: Dict[str, Any],
     location_info = job_payload.get("location", {})
     hazard_text = ",".join(types) if types else "複合災害"
     base_prompt_template = (
-        "目的: 避難訓練ポスターの背景画像を作る。後工程で文字とQRを合成する。\n"
+        "目的: 避難訓練ポスターの背景画像を作る。\n"
         "テーマ: 「参加しやすい・安心・地域で助け合う」。\n"
         "禁止: 災害の恐怖表現、瓦礫、負傷、炎、洪水の直接描写、過度な緊迫感、文字のベタ描き。\n"
         "大枠: A3 縦 / 300DPI / 印刷想定。\n"
