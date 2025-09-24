@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import math
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 import time
@@ -311,81 +312,413 @@ def _augment_plan_payload(plan: Dict[str, Any], context_summary: Optional[Dict[s
     plan["context"] = context_summary
 
 
-def _build_routes(
+def _build_routes_static(
     loc: Dict[str, Any],
     context_summary: Optional[Dict[str, Any]],
     hazard_types: Iterable[str],
 ) -> List[Dict[str, Any]]:
-    base_lat = loc.get("lat") or 0.0
-    base_lng = loc.get("lng") or 0.0
+    base_lat = float(loc.get("lat") or 0.0)
+    base_lng = float(loc.get("lng") or 0.0)
 
-    def _offset(lat_delta: float, lng_delta: float) -> Dict[str, float]:
-        return {"lat": round(base_lat + lat_delta, 6), "lng": round(base_lng + lng_delta, 6)}
-
-    hazard_set = {str(h) for h in hazard_types if h}
-    routes: List[Dict[str, Any]] = [
-        {
-            "name": "主要導線",
-            "type": "main",
-            "points": [
-                {**_offset(0.0, 0.0), "label": "開始地点"},
-                {**_offset(0.0005, 0.0005), "label": "集合地点"},
-                {**_offset(0.001, 0.001), "label": "指定避難所"},
-            ],
-            "notes": "通常導線。建物前広場を経由して指定避難所へ移動します。",
-        },
-        {
-            "name": "バリアフリー導線",
-            "type": "accessible",
-            "points": [
-                {**_offset(0.0, 0.0), "label": "開始地点"},
-                {**_offset(0.0004, -0.0003), "label": "スロープ"},
-                {**_offset(0.0009, -0.0001), "label": "指定避難所"},
-            ],
-            "notes": "スロープを利用した車椅子対応導線。介助者2名を配置して段差を回避します。",
-        },
-    ]
+    def _offset_point(north_m: float, east_m: float) -> Dict[str, float]:
+        lat_rad = math.radians(base_lat if base_lat else 0.0)
+        meters_per_deg_lat = 111_320.0
+        meters_per_deg_lng = max(1.0, 111_320.0 * math.cos(lat_rad))
+        lat_delta = north_m / meters_per_deg_lat
+        lng_delta = east_m / meters_per_deg_lng
+        return {
+            "lat": round(base_lat + lat_delta, 6),
+            "lng": round(base_lng + lng_delta, 6),
+        }
 
     hazard_scores = (context_summary or {}).get("hazard_scores", {})
-    if hazard_scores.get("flood_plan") or "flood" in hazard_set:
-        routes.append(
-            {
-                "name": "高台避難導線",
-                "type": "alternate",
-                "points": [
-                    {**_offset(0.0, 0.0), "label": "開始地点"},
-                    {**_offset(-0.0006, 0.0004), "label": "高台入口"},
-                    {**_offset(-0.0012, 0.0008), "label": "第二避難所"},
-                ],
-                "notes": "浸水リスクを避けるための高台ルート。夜間照明と案内表示を事前確認します。",
-            }
+    hazard_set = {str(h) for h in hazard_types if h}
+
+    orientation = 1 if int(round(base_lat * 1000) + round(base_lng * 1000)) % 2 == 0 else -1
+
+    def _route(name: str, rtype: str, segments: List[Tuple[str, float, float]], notes: str) -> Dict[str, Any]:
+        points: List[Dict[str, Any]] = []
+        for label, north, east in segments:
+            point = _offset_point(north, east * orientation)
+            point["label"] = label
+            points.append(point)
+        return {"name": name, "type": rtype, "points": points, "notes": notes}
+
+    routes: List[Dict[str, Any]] = []
+
+    routes.append(
+        _route(
+            "主要導線",
+            "main",
+            [
+                ("開始地点", 0.0, 0.0),
+                ("集合地点", 85.0, 32.0),
+                ("指定避難所", 180.0, 70.0),
+            ],
+            "通常導線。広場を経由して指定避難所へ移動します。",
         )
+    )
+
+    routes.append(
+        _route(
+            "バリアフリー導線",
+            "accessible",
+            [
+                ("開始地点", 0.0, 0.0),
+                ("スロープ", 50.0, -28.0),
+                ("指定避難所", 120.0, -18.0),
+            ],
+            "スロープと段差解消ルートを優先。介助者2名を配置して段差を回避します。",
+        )
+    )
+
+    flood_score = hazard_scores.get("flood_plan") or {}
+    flood_depth = float(flood_score.get("max_depth_m") or 0.0)
+    if flood_score or "flood" in hazard_set:
+        climb_extra = min(140.0, 35.0 * max(flood_depth, 1.0))
+        routes.append(
+            _route(
+                "高台避難導線",
+                "alternate",
+                [
+                    ("開始地点", 0.0, 0.0),
+                    ("高台入口", 150.0 + climb_extra, -45.0),
+                    ("第二避難所", 230.0 + climb_extra, -85.0),
+                ],
+                "浸水想定エリアを避けて高台へ移動。夜間照明と案内表示を事前確認します。",
+            )
+        )
+
     if "tsunami" in hazard_set:
+        routes.append(
+            _route(
+                "垂直避難導線",
+                "alternate",
+                [
+                    ("開始地点", 0.0, 0.0),
+                    ("屋内階段", 18.0, 6.0),
+                    ("屋上避難スペース", 22.0, 6.0),
+                ],
+                "津波警報発令時に3分以内で屋上に到達できる垂直導線。鍵と照明を事前確認します。",
+            )
+        )
+
+    if "fire" in hazard_set:
+        routes.append(
+            _route(
+                "防火巡回導線",
+                "inspection",
+                [
+                    ("開始地点", 0.0, 0.0),
+                    ("屋内消火栓", 65.0, 28.0),
+                    ("集合地点", 110.0, 42.0),
+                ],
+                "消火班が消防設備を確認しながら巡回。避難開始前に安全距離を確保します。",
+            )
+        )
+
+
+    return routes
+
+
+def _build_routes(
+    loc: Dict[str, Any],
+    context_summary: Optional[Dict[str, Any]],
+    hazard_types: Iterable[str],
+    region_context: Optional[Dict[str, Any]] = None,
+) -> List[Dict[str, Any]]:
+    base_lat = float(loc.get("lat") or 0.0)
+    base_lng = float(loc.get("lng") or 0.0)
+
+    def _meters_per_degree(lat: float) -> Tuple[float, float]:
+        lat_rad = math.radians(lat)
+        return 111_320.0, max(1.0, 111_320.0 * math.cos(lat_rad))
+
+    def _vector_to(dest_lat: float, dest_lng: float) -> Tuple[float, float]:
+        lat_deg, lng_deg = _meters_per_degree(base_lat)
+        return (
+            (dest_lat - base_lat) * lat_deg,
+            (dest_lng - base_lng) * lng_deg,
+        )
+
+    def _point_from_vector(north_m: float, east_m: float) -> Dict[str, float]:
+        lat_deg, lng_deg = _meters_per_degree(base_lat)
+        return {
+            "lat": round(base_lat + north_m / lat_deg, 6),
+            "lng": round(base_lng + east_m / lng_deg, 6),
+        }
+
+    def _feature_centroid(feature: Dict[str, Any]) -> Optional[Tuple[float, float]]:
+        geom = feature.get("geometry") if isinstance(feature, dict) else None
+        if not isinstance(geom, dict):
+            return None
+        coords = geom.get("coordinates")
+        gtype = geom.get("type")
+        if gtype == "Polygon" and coords:
+            ring = coords[0] if coords else []
+            if not ring:
+                return None
+            lng_sum = 0.0
+            lat_sum = 0.0
+            count = 0
+            for lng, lat in ring:
+                lng_sum += lng
+                lat_sum += lat
+                count += 1
+            if count:
+                return lat_sum / count, lng_sum / count
+        if gtype == "MultiPolygon" and coords:
+            for polygon in coords:
+                if polygon:
+                    ring = polygon[0]
+                    if ring:
+                        lng_sum = 0.0
+                        lat_sum = 0.0
+                        count = 0
+                        for lng, lat in ring:
+                            lng_sum += lng
+                            lat_sum += lat
+                            count += 1
+                        if count:
+                            return lat_sum / count, lng_sum / count
+        if gtype == "LineString" and coords:
+            lng_sum = 0.0
+            lat_sum = 0.0
+            count = 0
+            for lng, lat in coords:
+                lng_sum += lng
+                lat_sum += lat
+                count += 1
+            if count:
+                return lat_sum / count, lng_sum / count
+        if gtype == "Point" and isinstance(coords, (list, tuple)) and len(coords) >= 2:
+            return float(coords[1]), float(coords[0])
+        return None
+
+    def _hazard_vector(hazard_key: str, sample_limit: int = 200) -> Tuple[float, float]:
+        hazards = (region_context or {}).get("hazards") if isinstance(region_context, dict) else None
+        hazard_data = hazards.get(hazard_key) if isinstance(hazards, dict) else None
+        features = hazard_data.get("features") if isinstance(hazard_data, dict) else None
+        if not isinstance(features, list) or not features:
+            return (0.0, 0.0)
+        step = max(1, len(features) // sample_limit)
+        total_n = 0.0
+        total_e = 0.0
+        count = 0
+        for idx in range(0, len(features), step):
+            centroid = _feature_centroid(features[idx])
+            if centroid is None:
+                continue
+            north_m, east_m = _vector_to(centroid[0], centroid[1])
+            total_n += north_m
+            total_e += east_m
+            count += 1
+            if count >= sample_limit:
+                break
+        if count == 0:
+            return (0.0, 0.0)
+        return (total_n / count, total_e / count)
+
+    def _sanitize_shelters() -> List[Dict[str, Any]]:
+        if not isinstance(region_context, dict):
+            return []
+        shelters_raw = region_context.get("shelters") or []
+        shelters: List[Dict[str, Any]] = []
+        for entry in shelters_raw:
+            if not isinstance(entry, dict):
+                continue
+            loc_info = entry.get("location")
+            if not isinstance(loc_info, dict):
+                continue
+            lat = loc_info.get("lat")
+            lng = loc_info.get("lng")
+            if not isinstance(lat, (int, float)) or not isinstance(lng, (int, float)):
+                continue
+            shelters.append(
+                {
+                    "id": str(entry.get("id") or ""),
+                    "name": str(entry.get("name") or "指定避難所"),
+                    "lat": float(lat),
+                    "lng": float(lng),
+                }
+            )
+        return shelters
+
+    def _sorted_shelters() -> List[Dict[str, Any]]:
+        return sorted(_sanitize_shelters(), key=lambda s: _distance(s))
+
+    def _distance(shelter: Dict[str, Any]) -> float:
+        return math.hypot(*_vector_to(shelter.get("lat", base_lat), shelter.get("lng", base_lng)))
+
+    def _select_high_ground(shelters: List[Dict[str, Any]], flood_vec: Tuple[float, float]) -> Optional[Dict[str, Any]]:
+        if not shelters:
+            return None
+        hazard_norm = math.hypot(flood_vec[0], flood_vec[1])
+        best = None
+        best_score = float("-inf")
+        for shelter in shelters:
+            north_m, east_m = _vector_to(shelter["lat"], shelter["lng"])
+            dist = math.hypot(north_m, east_m) + 1e-6
+            lat_bonus = (shelter["lat"] - base_lat) * 120.0
+            score = lat_bonus - (dist / 80.0)
+            if hazard_norm > 1.0:
+                away_n = -flood_vec[0] / hazard_norm
+                away_e = -flood_vec[1] / hazard_norm
+                score += ((north_m / dist) * away_n + (east_m / dist) * away_e) * 150.0
+            if score > best_score:
+                best = shelter
+                best_score = score
+        return best or shelters[-1]
+
+    def _build_shelter_route(
+        name: str,
+        rtype: str,
+        shelter: Dict[str, Any],
+        mid_label: str,
+        lateral_shift: float,
+        notes: str,
+    ) -> Dict[str, Any]:
+        dest_lat = float(shelter.get("lat", base_lat))
+        dest_lng = float(shelter.get("lng", base_lng))
+        north_m, east_m = _vector_to(dest_lat, dest_lng)
+        distance = math.hypot(north_m, east_m)
+        start_point = {
+            "lat": round(base_lat, 6),
+            "lng": round(base_lng, 6),
+            "label": "開始地点",
+        }
+        if distance < 1.0:
+            mid_point = _point_from_vector(70.0, 25.0 * math.copysign(1, lateral_shift or 1.0))
+            mid_point["label"] = mid_label
+            dest_point = {
+                "lat": round(dest_lat + 0.001, 6),
+                "lng": round(dest_lng + 0.001, 6),
+                "label": shelter.get("name", "指定避難所"),
+            }
+            points = [start_point, mid_point, dest_point]
+        else:
+            perp_n = -east_m
+            perp_e = north_m
+            perp_norm = math.hypot(perp_n, perp_e)
+            if perp_norm > 0 and lateral_shift:
+                factor = lateral_shift / perp_norm
+                perp_n *= factor
+                perp_e *= factor
+            else:
+                perp_n = 0.0
+                perp_e = 0.0
+            mid_n = north_m * 0.45 + perp_n
+            mid_e = east_m * 0.45 + perp_e
+            mid_point = _point_from_vector(mid_n, mid_e)
+            mid_point["label"] = mid_label
+            dest_point = {
+                "lat": round(dest_lat, 6),
+                "lng": round(dest_lng, 6),
+                "label": shelter.get("name", "指定避難所"),
+            }
+            points = [start_point, mid_point, dest_point]
+        return {"name": name, "type": rtype, "points": points, "notes": notes}
+
+    hazard_scores = (context_summary or {}).get("hazard_scores", {})
+    hazard_set = {str(h) for h in hazard_types if h}
+
+    shelters_sorted = _sorted_shelters()
+    if not shelters_sorted:
+        return _build_routes_static(loc, context_summary, hazard_types)
+
+    primary_shelter = shelters_sorted[0]
+    accessible_shelter = shelters_sorted[1] if len(shelters_sorted) > 1 else primary_shelter
+    flood_vec = _hazard_vector("flood_plan") if hazard_scores.get("flood_plan") or "flood" in hazard_set else (0.0, 0.0)
+    high_ground_shelter = _select_high_ground(shelters_sorted, flood_vec) or primary_shelter
+
+    orientation = 1 if int(round(base_lat * 1000) + round(base_lng * 1000)) % 2 == 0 else -1
+
+    routes: List[Dict[str, Any]] = []
+
+    main_notes = f"{primary_shelter.get('name')} を主な集合避難場所とし、周辺の動線を確認します。"
+    routes.append(
+        _build_shelter_route(
+            "主要導線",
+            "main",
+            primary_shelter,
+            "集合地点",
+            15.0 * orientation,
+            main_notes,
+        )
+    )
+
+    accessible_notes = f"車椅子・要配慮者が利用しやすいルートで {accessible_shelter.get('name')} へ誘導します。"
+    lateral_access = 25.0 * (-orientation)
+    landslide_vec = _hazard_vector("landslide") if hazard_scores.get("landslide") or "landslide" in hazard_set else (0.0, 0.0)
+    if math.hypot(*landslide_vec) > 1.0:
+        access_vec = _vector_to(accessible_shelter.get("lat", base_lat), accessible_shelter.get("lng", base_lng))
+        if access_vec[0] * landslide_vec[0] + access_vec[1] * landslide_vec[1] > 0:
+            lateral_access = -lateral_access
+    routes.append(
+        _build_shelter_route(
+            "バリアフリー導線",
+            "accessible",
+            accessible_shelter,
+            "スロープ",
+            lateral_access,
+            accessible_notes,
+        )
+    )
+
+    flood_score = hazard_scores.get("flood_plan") or {}
+    flood_depth = float(flood_score.get("max_depth_m") or 0.0)
+    if flood_score or "flood" in hazard_set:
+        depth_note = f"想定浸水深 {flood_depth}m " if flood_depth else ""
+        high_notes = f"{depth_note}{high_ground_shelter.get('name')} の高台へ退避し、照明と案内表示を事前確認します。"
+        routes.append(
+            _build_shelter_route(
+                "高台避難導線",
+                "alternate",
+                high_ground_shelter,
+                "高台入口",
+                20.0 * orientation,
+                high_notes,
+            )
+        )
+
+    if "tsunami" in hazard_set:
+        vertical_start = {
+            "lat": round(base_lat, 6),
+            "lng": round(base_lng, 6),
+            "label": "開始地点",
+        }
+        stair_point = _point_from_vector(12.0, 5.0 * orientation)
+        stair_point["label"] = "屋内階段"
+        roof_point = _point_from_vector(18.0, 5.0 * orientation)
+        roof_point["label"] = "屋上避難スペース"
         routes.append(
             {
                 "name": "垂直避難導線",
                 "type": "alternate",
-                "points": [
-                    {**_offset(0.0, 0.0), "label": "開始地点"},
-                    {**_offset(0.0002, 0.0001), "label": "屋内階段"},
-                    {**_offset(0.0002, 0.0001), "label": "屋上避難スペース"},
-                ],
-                "notes": "津波警報発令時に3分以内で屋上へ避難するための垂直導線。手すり点検と照明確保が必要です。",
+                "points": [vertical_start, stair_point, roof_point],
+                "notes": "津波警報発令時に3分以内で屋上に避難できるかを訓練します。鍵と照明を事前確認。",
             }
         )
+
     if "fire" in hazard_set:
+        start_point = {
+            "lat": round(base_lat, 6),
+            "lng": round(base_lng, 6),
+            "label": "開始地点",
+        }
+        hydrant_point = _point_from_vector(55.0, 22.0 * orientation)
+        hydrant_point["label"] = "屋内消火栓"
+        muster_point = _point_from_vector(95.0, 38.0 * orientation)
+        muster_point["label"] = "集合地点"
         routes.append(
             {
                 "name": "防火巡回導線",
                 "type": "inspection",
-                "points": [
-                    {**_offset(0.0, 0.0), "label": "開始地点"},
-                    {**_offset(0.0003, 0.0002), "label": "屋内消火栓"},
-                    {**_offset(0.0006, 0.0001), "label": "集合地点"},
-                ],
-                "notes": "消火班が消防設備を確認しながら巡回する導線。避難開始前に安全距離を確保します。",
+                "points": [start_point, hydrant_point, muster_point],
+                "notes": "消火班が消防設備を確認しながら巡回し、安全距離を確保します。",
             }
         )
+
     return routes
 
 
@@ -479,10 +812,11 @@ def _augment_scenario_assets(
     assets: Dict[str, Any],
     job_payload: Dict[str, Any],
     context_summary: Optional[Dict[str, Any]],
+    region_context: Optional[Dict[str, Any]] = None,
 ) -> None:
     loc = job_payload.get("location", {})
     hazard_types = [str(t) for t in job_payload.get("hazard", {}).get("types", []) or []]
-    routes = _build_routes(loc, context_summary, hazard_types)
+    routes = _build_routes(loc, context_summary, hazard_types, region_context)
     if not assets.get("routes"):
         assets["routes"] = routes
     elif context_summary and context_summary.get("hazard_scores", {}).get("flood_plan"):
@@ -732,6 +1066,7 @@ def _build_scenario(
     job_payload: Dict[str, Any],
     storage: Optional[Storage],
     context_summary: Optional[Dict[str, Any]] = None,
+    region_context: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     # Optional Gemini generation (staged via env)
     try:
@@ -755,7 +1090,7 @@ def _build_scenario(
                     assets["context"] = context_summary
                 assets.setdefault("timeline", _build_timeline(context_summary, hazard_types))
                 assets.setdefault("resource_checklist", _build_resource_checklist(context_summary, hazard_types))
-                _augment_scenario_assets(assets, job_payload, context_summary)
+                _augment_scenario_assets(assets, job_payload, context_summary, region_context)
                 highlights_g = list(context_summary.get("highlights", []) if context_summary else [])
                 hazard_tips = [HAZARD_ACCEPTANCE_TIPS.get(ht) for ht in hazard_types if HAZARD_ACCEPTANCE_TIPS.get(ht)]
                 for tip in hazard_tips:
@@ -798,7 +1133,7 @@ def _build_scenario(
         if tip and tip not in highlights:
             highlights.append(tip)
 
-    routes = _build_routes(loc, context_summary, hazard_types)
+    routes = _build_routes(loc, context_summary, hazard_types, region_context)
     timeline = _build_timeline(context_summary, hazard_types)
     resource_checklist = _build_resource_checklist(context_summary, hazard_types)
     script_base = _generate_japanese_script(loc, hazard_types)
@@ -814,7 +1149,7 @@ def _build_scenario(
     }
     if context_summary:
         assets["context"] = context_summary
-    _augment_scenario_assets(assets, job_payload, context_summary)
+    _augment_scenario_assets(assets, job_payload, context_summary, region_context)
     highlights = assets.get("highlights", highlights)
     by_lang: Dict[str, Any] = {}
     primary = (langs[0] if len(langs) else "ja")
@@ -1013,7 +1348,7 @@ def _build_content(job_payload: Dict[str, Any], scenario_assets: Dict[str, Any],
     location_info = job_payload.get("location", {})
     hazard_text = ",".join(types) if types else "複合災害"
     base_prompt_template = (
-        "Goal: create a background image for an evacuation drill poster; text and QR codes will be composited later.\n"
+        "Goal: create an evacuation drill poster.\n"
         "Theme: friendly, safe, community-based mutual support.\n"
         "Avoid: fear-inducing scenes, rubble, injuries, flames.\n"
         "Negative prompt: no text, no numbers, no typography, no signage with words, no distress, no emergency vehicles, no smoke, no darkness, no dramatic warning icons.\n"
@@ -1166,6 +1501,7 @@ class TaskContext:
     job_doc: Dict[str, Any]
     storage: Optional[Storage]
     context_summary: Optional[Dict[str, Any]]
+    region_context: Optional[Dict[str, Any]]
 
 
 def _extract_scenario_assets(job_doc: Dict[str, Any]) -> Dict[str, Any]:
@@ -1188,7 +1524,7 @@ def _execute_plan(ctx: TaskContext) -> Dict[str, Any]:
 
 
 def _execute_scenario(ctx: TaskContext) -> Dict[str, Any]:
-    return _build_scenario(ctx.job_id, ctx.job_payload, ctx.storage, ctx.context_summary)
+    return _build_scenario(ctx.job_id, ctx.job_payload, ctx.storage, ctx.context_summary, ctx.region_context)
 
 
 def _execute_safety(ctx: TaskContext) -> Dict[str, Any]:
@@ -1219,6 +1555,79 @@ def _derive_next_task(current: str) -> Optional[str]:
     return None
 
 
+def _prepare_attempts_map(doc: Dict[str, Any]) -> Dict[str, int]:
+    attempts = doc.get("attempts")
+    return dict(attempts) if isinstance(attempts, dict) else {}
+
+
+def _build_task_update(
+    job_doc: Dict[str, Any],
+    task: str,
+    result: Dict[str, Any],
+    attempts_map: Dict[str, int],
+) -> Dict[str, Any]:
+    prev_results: Dict[str, Any] = {}
+    if isinstance(job_doc.get("results"), dict):
+        prev_results = dict(job_doc.get("results") or {})
+    prev_results[task] = result
+
+    update: Dict[str, Any] = {"result": result, "results": prev_results}
+    if task == "scenario" and isinstance(result.get("assets"), dict):
+        update["assets"] = result["assets"]
+
+    completed_tasks = set(job_doc.get("completed_tasks") or [])
+    completed_tasks.add(task)
+    update["completed_tasks"] = sorted(completed_tasks)
+
+    completed_order = list(job_doc.get("completed_order") or [])
+    if task not in completed_order:
+        completed_order.append(task)
+    update["completed_order"] = completed_order
+
+    remaining_attempts = dict(attempts_map)
+    if task in remaining_attempts:
+        remaining_attempts.pop(task, None)
+    update["attempts"] = remaining_attempts
+    return update
+
+
+def _schedule_next_task(job_id: str, current_task: str) -> None:
+    next_task = _derive_next_task(current_task)
+    if not next_task:
+        return
+    try:
+        pub = Publisher()
+        pub.publish_json({"job_id": job_id, "task": next_task}, attributes={"type": next_task})
+    except Exception:
+        pass
+
+
+def _schedule_retry(
+    job_id: str,
+    task: str,
+    attempts_map: Dict[str, int],
+    settings: Optional[Settings],
+) -> Optional[Dict[str, Any]]:
+    if task in {"", "unknown"}:
+        return None
+    attempt_count = int(attempts_map.get(task, 0))
+    max_try = getattr(settings, "retry_max_attempts", 3) if settings else 3
+    if attempt_count >= max_try:
+        return None
+    base = 2 ** min(attempt_count, 5)
+    delay_sec = min(30.0, float(base) + random.uniform(0.0, 1.0))
+    delay_ms = int(delay_sec * 1000)
+    try:
+        pub = Publisher()
+        pub.publish_json(
+            {"job_id": job_id, "task": task},
+            attributes={"type": task, "delay_ms": str(delay_ms)},
+        )
+        return {"task": task, "attempt": attempt_count, "delay_ms": delay_ms}
+    except Exception:
+        return None
+
+
 @app.post("/pubsub/push")
 def pubsub_push(body: Dict[str, Any], authorization: Optional[str] = Header(default=None)) -> Dict[str, str]:
     settings: Optional[Settings] = None  # loaded lazily; reused for retry policy
@@ -1227,6 +1636,7 @@ def pubsub_push(body: Dict[str, Any], authorization: Optional[str] = Header(defa
     amap: Dict[str, int] = {}
     update: Dict[str, Any] = {}
     tname = "unknown"
+    jobs: Optional[JobsStore] = None
     try:
         if not _verify_push(authorization):
             return {"status": "ack_error", "detail": "unauthorized"}
@@ -1256,17 +1666,15 @@ def pubsub_push(body: Dict[str, Any], authorization: Optional[str] = Header(defa
         jobs = JobsStore()
 
         # Idempotency per task: skip if already completed
-        existing = jobs.get(job_id)
-        if existing:
-            completed_tasks = set(existing.get("completed_tasks") or [])
-            if task in completed_tasks:
-                return {"status": "ack", "note": "already_completed_task"}
-
-        jobs.update_status(job_id, "processing", {"task": task})
-
         job_doc = jobs.get(job_id) or {}
         if not job_doc:
             raise ValueError(f"job_not_found: {job_id}")
+        completed_tasks = set(job_doc.get("completed_tasks") or [])
+        if task in completed_tasks:
+            return {"status": "ack", "note": "already_completed_task"}
+
+        jobs.update_status(job_id, "processing", {"task": task})
+
         job_payload: Dict[str, Any] = job_doc.get("payload") or {}
 
         try:
@@ -1279,9 +1687,7 @@ def pubsub_push(body: Dict[str, Any], authorization: Optional[str] = Header(defa
         except Exception:
             storage = None
 
-        attempts_map: Dict[str, int] = {}
-        if isinstance(job_doc.get("attempts"), dict):
-            attempts_map = dict(job_doc.get("attempts") or {})
+        attempts_map = _prepare_attempts_map(job_doc)
         amap = attempts_map
 
         region_ctx = _load_region_context(job_payload)
@@ -1298,59 +1704,26 @@ def pubsub_push(body: Dict[str, Any], authorization: Optional[str] = Header(defa
             job_doc=job_doc,
             storage=storage,
             context_summary=context_summary,
+            region_context=region_ctx,
         )
 
         result = executor(ctx)
 
-        # Persist result; also persist per-task results history and top-level assets after 'scenario'
-        # Merge into results map
-        prev_results: Dict[str, Any] = {}
-        try:
-            if isinstance(job_doc.get("results"), dict):
-                prev_results = dict(job_doc.get("results") or {})
-        except Exception:
-            prev_results = {}
-        prev_results[task] = result
-        extra_update: Dict[str, Any] = {"result": result, "results": prev_results}
-        if task == "scenario" and isinstance(result, dict) and isinstance(result.get("assets"), dict):
-            extra_update["assets"] = result["assets"]
-        # Mark this task as completed (append to list)
-        current_doc = jobs.get(job_id) or {}
-        completed_tasks = set((current_doc.get("completed_tasks") or []))
-        completed_tasks.add(task)
-        completed_sorted = sorted(list(completed_tasks))
-        extra_update["completed_tasks"] = completed_sorted
-        # Maintain completed_order to preserve execution order
-        completed_order = list(current_doc.get("completed_order") or [])
-        if task not in completed_order:
-            completed_order.append(task)
-        extra_update["completed_order"] = completed_order
-        # Reset attempts for this task after success
-        if task in attempts_map:
-            attempts_map.pop(task, None)
-        extra_update["attempts"] = attempts_map
+        extra_update = _build_task_update(job_doc, task, result, attempts_map)
         jobs.update_status(job_id, "done", extra_update)
 
         # Chain next task automatically (best-effort)
-        next_t = _derive_next_task(task)
-        if next_t:
-            try:
-                pub = Publisher()
-                pub.publish_json({"job_id": job_id, "task": next_t}, attributes={"type": next_t})
-            except Exception:
-                pass
+        _schedule_next_task(job_id, task)
         return {"status": "ack"}
     except Exception as e:
         # Best effort: try to record error if we have job_id
         try:
             job_id = job_id if "job_id" in locals() else None
             if job_id:
-                js = JobsStore()
+                js = jobs or JobsStore()
                 # Update attempts counter
                 doc = js.get(job_id) or {}
-                amap: Dict[str, int] = {}
-                if isinstance(doc.get("attempts"), dict):
-                    amap = dict(doc.get("attempts") or {})
+                amap = dict(doc.get("attempts") or {}) if isinstance(doc.get("attempts"), dict) else {}
                 # task may be undefined if decoding failed
                 tname = (task if "task" in locals() else "unknown")
                 amap[tname] = int(amap.get(tname, 0)) + 1
@@ -1359,23 +1732,16 @@ def pubsub_push(body: Dict[str, Any], authorization: Optional[str] = Header(defa
             pass
         # Basic retry with exponential backoff + jitter if attempts below threshold
         try:
-            max_try = getattr(settings, "retry_max_attempts", 3) if settings else 3
-            if tname not in {"", "unknown"} and amap[tname] < max_try:
-                # backoff seconds: min(30, 2^attempt + jitter[0,1))
-                base = 2 ** min(amap[tname], 5)
-                delay_sec = min(30.0, float(base) + random.uniform(0.0, 1.0))
-                delay_ms = int(delay_sec * 1000)
-                pub = Publisher()
-                pub.publish_json(
-                    {"job_id": job_id, "task": tname},
-                    attributes={"type": tname, "delay_ms": str(delay_ms)},
-                )
-                update["retry"] = {"task": tname, "attempt": amap[tname], "delay_ms": delay_ms}
+            if job_id and "attempts" in update:
+                retry_info = _schedule_retry(job_id, tname, amap, settings)
+                if retry_info:
+                    update["retry"] = retry_info
         except Exception:
             pass
         if job_id:
             try:
-                js.update_status(job_id, "error", update)
+                store = jobs or JobsStore()
+                store.update_status(job_id, "error", update)
             except Exception:
                 pass
         try:
