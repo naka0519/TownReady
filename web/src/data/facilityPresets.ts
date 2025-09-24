@@ -43,16 +43,16 @@ export const FACILITY_PRESETS: FacilityPreset[] = [
     description: '高齢者比率が高い自治会活動拠点。止水板配置と要配慮者支援の即応が求められる。',
     form: {
       address: '神奈川県横浜市戸塚区吉田町１０４−１ 戸塚地区センター',
-      lat: 35.4011,
-      lng: 139.5345,
-      languages: ['ja', 'en'],
+      lat: 35.3996,
+      lng: 139.5375,
+      languages: ['ja'],
       hazardTypes: ['flood', 'landslide'],
       participants: {
         total: 80,
         children: 5,
         elderly: 28,
         wheelchair: 4,
-        languages: ['ja', 'en'],
+        languages: ['ja'],
       },
       constraints: {
         maxDurationMin: 45,
@@ -86,8 +86,8 @@ export const FACILITY_PRESETS: FacilityPreset[] = [
     description: '児童の引き渡し導線と学年別役割が必須となる市立小学校。',
     form: {
       address: '神奈川県横浜市戸塚区戸塚町１３２',
-      lat: 35.3939,
-      lng: 139.5364,
+      lat: 35.3973,
+      lng: 139.5322,
       languages: ['ja'],
       hazardTypes: ['earthquake', 'fire'],
       participants: {
@@ -129,16 +129,16 @@ export const FACILITY_PRESETS: FacilityPreset[] = [
     description: '駅直結の複合商業施設。営業時間帯でもテナント一斉避難と来客誘導が必要。',
     form: {
       address: '神奈川県横浜市戸塚区戸塚町１０ 戸塚モディ',
-      lat: 35.4009,
-      lng: 139.5333,
-      languages: ['ja', 'en', 'ko'],
+      lat: 35.4014,
+      lng: 139.5347,
+      languages: ['ja'],
       hazardTypes: ['earthquake', 'flood', 'fire'],
       participants: {
         total: 180,
         children: 10,
         elderly: 12,
         wheelchair: 3,
-        languages: ['ja', 'en', 'ko'],
+        languages: ['ja'],
       },
       constraints: {
         maxDurationMin: 40,
