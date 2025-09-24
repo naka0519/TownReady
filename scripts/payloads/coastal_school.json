@@ -1,0 +1,25 @@
+{
+  "location": {
+    "address": "神奈川県藤沢市片瀬海岸１丁目１−１",
+    "lat": 35.3081,
+    "lng": 139.4805
+  },
+  "participants": {
+    "total": 320,
+    "children": 280,
+    "elderly": 12,
+    "wheelchair": 6,
+    "languages": ["ja", "en"]
+  },
+  "hazard": {
+    "types": ["earthquake", "tsunami", "fire"],
+    "drill_date": "2025-09-01",
+    "indoor": false,
+    "nighttime": false
+  },
+  "constraints": {
+    "max_duration_min": 60,
+    "limited_outdoor": false
+  },
+  "kb_refs": ["kb://tsunami_vertical_evac", "kb://school_fire_manual"]
+}

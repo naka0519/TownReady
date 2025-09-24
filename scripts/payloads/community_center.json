@@ -1,0 +1,25 @@
+{
+  "location": {
+    "address": "神奈川県横浜市戸塚区戸塚町４０００",
+    "lat": 35.3985,
+    "lng": 139.5372
+  },
+  "participants": {
+    "total": 150,
+    "children": 30,
+    "elderly": 35,
+    "wheelchair": 4,
+    "languages": ["ja", "en"]
+  },
+  "hazard": {
+    "types": ["earthquake", "flood"],
+    "drill_date": "2025-12-05",
+    "indoor": true,
+    "nighttime": false
+  },
+  "constraints": {
+    "max_duration_min": 50,
+    "limited_outdoor": true
+  },
+  "kb_refs": ["kb://yokohama_guideline", "kb://wheelchair_support"]
+}

@@ -19,33 +19,26 @@ except Exception:
     sys.path.append(str(Path(__file__).resolve().parents[1]))
     from schemas import GenerateBaseRequest  # type: ignore
 
-sample = {
-  "location": {"address": "横浜市戸塚区戸塚町上倉田町７６９−１", "lat": 35.398961, "lng": 139.537466},
-  "participants": {"total": 120, "children": 25, "elderly": 18, "wheelchair": 3, "languages": ["ja", "en"]},
-  "hazard": {"types": ["earthquake", "fire"], "drill_date": "2025-10-12", "indoor": True, "nighttime": False},
-  "constraints": {"max_duration_min": 45, "limited_outdoor": True},
-  "kb_refs": ["kb://yokohama_guideline", "kb://shelter_rules"]
-}
-try:
-    _ = GenerateBaseRequest.model_validate(sample)
-    print("OK: GenerateBaseRequest is valid")
-except ValidationError as e:
-    print("ERROR: validation failed\n", e)
-    raise SystemExit(1)
+payload_dir = Path("scripts/payloads")
+paths = sorted(payload_dir.glob("*.json"))
+if not paths:
+    raise SystemExit("No payload samples found in scripts/payloads")
+
+for path in paths:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        GenerateBaseRequest.model_validate(data)
+        print(f"OK: {path.name}")
+    except ValidationError as exc:
+        print(f"ERROR: {path}: validation failed\n{exc}")
+        raise SystemExit(1)
 PY
 
 if [[ -n "${API_URL:-}" ]]; then
   echo "[ContractTest] API smoke (plan)"
   mkdir -p tmp
-  cat > tmp/ct_plan.json <<'JSON'
-{
-  "location": { "address": "横浜市戸塚区戸塚町上倉田町７６９−１", "lat": 35.398961, "lng": 139.537466 },
-  "participants": {"total": 120, "children": 25, "elderly": 18, "wheelchair": 3, "languages": ["ja","en"]},
-  "hazard": {"types": ["earthquake","fire"], "drill_date": "2025-10-12", "indoor": true, "nighttime": false},
-  "constraints": {"max_duration_min": 45, "limited_outdoor": true},
-  "kb_refs": ["kb://yokohama_guideline", "kb://shelter_rules"]
-}
-JSON
+  SAMPLE_JSON=$(ls scripts/payloads/*.json | head -n1)
+  cp "$SAMPLE_JSON" tmp/ct_plan.json
   JOB_ID=$(curl -sS -X POST -H 'Content-Type: application/json' \
     -d @tmp/ct_plan.json "$API_URL/api/generate/plan" | jq -r .job_id)
   test -n "$JOB_ID" || { echo "[ContractTest] ERROR: job_id empty"; exit 1; }

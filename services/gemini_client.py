@@ -96,17 +96,25 @@ class Gemini:
         loc = payload.get("location", {})
         parts = payload.get("participants", {})
         hazard = payload.get("hazard", {})
+        region_ctx = payload.get("region_context") or {}
         languages = parts.get("languages") or ["ja"]
         prompt = f"""
-Create a drill PlanSpec for the following.
-Location: {json.dumps(loc, ensure_ascii=False)}
-Participants: {json.dumps(parts, ensure_ascii=False)}
-Hazard: {json.dumps(hazard, ensure_ascii=False)}
-Return strictly a JSON object with keys:
-  scenarios: [{{"id": "S1", "title": "...", "languages": {languages}}}],
-  acceptance: {{"must_include": ["..."], "kpi_plan": {{"targets": {{"attendance_rate": 0.6, "avg_evac_time_sec": 300, "quiz_score": 0.7}}, "collection": ["checkin","route_time","post_quiz"]}}}},
-  handoff: {{"to": "Scenario Agent", "with": {{"scenario_id": "S1"}}}}
-No markdown fences. Ensure strings are valid JSON strings (escape newlines as \\n).
+You are an incident drill planner. Create a JSON object describing a localized PlanSpec.
+Always include these keys:
+  scenarios: array of objects {{ id (string), title (string), languages (array of strings) }}. Provide at least one scenario.
+  acceptance: object with keys:
+    must_include: array of hazard-aware checklist items (include flood/landslide actions when applicable).
+    kpi_plan: object with targets (attendance_rate, avg_evac_time_sec, quiz_score) and collection (array of measurement channels).
+  handoff: object {{ to: "Scenario Agent", with: {{ scenario_id: "S1" }} }}
+  highlights: array of strings summarizing local risks. Include the key even if the array is empty.
+
+Inputs:
+  Location: {json.dumps(loc, ensure_ascii=False)}
+  Participants: {json.dumps(parts, ensure_ascii=False)}
+  Hazards: {json.dumps(hazard, ensure_ascii=False)}
+  RegionContext: {json.dumps(region_ctx, ensure_ascii=False)}
+
+Output MUST be valid JSON matching the schema above. Do not include extra keys. Escape newlines as \\n.
 """
         raw = self._gen_json(prompt)
         # Minimal validation: require scenarios[] and acceptance/handoff keys
@@ -124,19 +132,24 @@ No markdown fences. Ensure strings are valid JSON strings (escape newlines as \\
         loc = payload.get("location", {})
         hazard = payload.get("hazard", {})
         parts = payload.get("participants", {})
+        region_ctx = payload.get("region_context") or {}
         langs = parts.get("languages") or ["ja"]
         prompt = f"""
-Create a scenario assets bundle.
-Location: {json.dumps(loc, ensure_ascii=False)}
-Hazard: {json.dumps(hazard, ensure_ascii=False)}
-Participants: {json.dumps(parts, ensure_ascii=False)}
-Return strictly a JSON object with key "assets": {{
-  "script_md": "# Title\\n...",  // markdown as a single JSON string (newlines escaped)
-  "roles_csv": "role,name\\nLead,Name...", // CSV as a single JSON string
-  "routes": [{{"name": "Main", "points": [{{"lat": 0, "lng": 0, "label": "Start"}}], "accessibility_notes": "..."}}],
-  "languages": {langs}
-}}.
-No markdown code fences. All strings must be valid JSON strings with escaped newlines (\\n).
+Generate scenario assets tailored to the inputs.
+Inputs:
+  Location: {json.dumps(loc, ensure_ascii=False)}
+  Hazards: {json.dumps(hazard, ensure_ascii=False)}
+  Participants: {json.dumps(parts, ensure_ascii=False)}
+  RegionContext: {json.dumps(region_ctx, ensure_ascii=False)}
+You MUST return JSON of the form {{ "assets": {{ ... }} }} including:
+  script_md: markdown string with sections `## Steps` and `## Local Risk Highlights` (or Japanese equivalent) reflecting hazard details.
+  roles_csv: CSV string with headers role,name,responsibility and entries for lead/marshal/assistants.
+  routes: array of objects each with name, type (main|accessible|alternate), points (array of {{lat,lng,label}}), notes. Include an alternate high-ground route when flood risk exists.
+  timeline: array of objects {{ step, timestamp_offset_sec, description }} with hazard-aware checkpoints.
+  resource_checklist: array of strings listing equipment/tasks.
+  languages: {langs}
+  highlights: array of summary strings (include even if empty).
+All strings must escape newlines as \\n. Do not add extra keys or markdown fences.
 """
         raw = self._gen_json(prompt)
         # Minimal validation: assets.script_md/roles_csv strings

@@ -57,6 +57,49 @@ class ContentRequest(BaseModel):
     languages: Optional[List[str]] = None
 
 
+def _prepare_job_payload(payload: GenerateBaseRequest) -> Dict[str, Any]:
+    data = payload.model_dump(mode="json")
+    try:
+        try:
+            from GCP_AI_Agent_hackathon.services import RegionContextStore  # type: ignore
+        except Exception:
+            import sys
+            from pathlib import Path
+
+            sys.path.append(str(Path(__file__).resolve().parents[1]))
+            from services import RegionContextStore  # type: ignore
+
+        store = RegionContextStore()
+        location = data.get("location") or {}
+        ref = store.derive_key(location)
+        if ref:
+            data["region_context_ref"] = ref
+            try:
+                context = store.load_by_id(ref)
+            except Exception:
+                context = None
+            if isinstance(context, dict):
+                meta = context.get("meta", {}) if isinstance(context, dict) else {}
+                snapshot_meta: Dict[str, Any] = {}
+                if isinstance(meta, dict):
+                    for key in ("region_context_id", "source", "region_context_catalog"):
+                        if meta.get(key) is not None:
+                            snapshot_meta[key] = meta.get(key)
+                snapshot: Dict[str, Any] = {
+                    "region": context.get("region"),
+                    "hazard_scores": context.get("hazard_scores"),
+                    "hazards": context.get("hazards"),
+                }
+                if context.get("highlights"):
+                    snapshot["highlights"] = context.get("highlights")
+                if snapshot_meta:
+                    snapshot["meta"] = snapshot_meta
+                data["region_context_snapshot"] = snapshot
+    except Exception:
+        pass
+    return data
+
+
 # @app.get("/healthz")
 # def healthz() -> Dict[str, str]:
 #     return {"status": "ok"}
@@ -87,6 +130,25 @@ def health_firestore() -> Dict[str, str]:
         return {"status": "error", "message": str(e)}
 
 
+@app.post("/api/webhooks/kpi")
+def ingest_kpi(payload: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        try:
+            from GCP_AI_Agent_hackathon.services.kpi_ingest import KPIIngestor  # type: ignore
+        except Exception:
+            import sys
+            from pathlib import Path
+
+            sys.path.append(str(Path(__file__).resolve().parents[1]))
+            from services.kpi_ingest import KPIIngestor  # type: ignore
+
+        ingestor = KPIIngestor()
+        result = ingestor.ingest(payload)
+        return {"status": "ok", **result}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"kpi_ingest_failed: {exc}")
+
+
 @app.post("/api/generate/plan")
 def generate_plan(payload: GenerateBaseRequest) -> Dict[str, Any]:
     # Create a job entry for downstream workers to pick up (stub).
@@ -101,7 +163,8 @@ def generate_plan(payload: GenerateBaseRequest) -> Dict[str, Any]:
 
     jobs = JobsStore()
     try:
-        job_id = jobs.create(payload.model_dump(mode="json"), status="queued")
+        job_payload = _prepare_job_payload(payload)
+        job_id = jobs.create(job_payload, status="queued")
     except Exception as e:
         # Surface error to help diagnose Firestore write issues
         raise HTTPException(status_code=500, detail=f"firestore_create_failed: {e}")
@@ -140,7 +203,8 @@ def generate_scenario(payload: GenerateBaseRequest) -> Dict[str, Any]:
 
     jobs = JobsStore()
     try:
-        job_id = jobs.create({"endpoint": "generate/scenario", **payload.model_dump(mode="json")}, status="queued")
+        job_payload = _prepare_job_payload(payload)
+        job_id = jobs.create({"endpoint": "generate/scenario", **job_payload}, status="queued")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"firestore_create_failed: {e}")
 
@@ -175,7 +239,8 @@ def review_safety(payload: SafetyReviewRequest) -> Dict[str, Any]:
 
     jobs = JobsStore()
     try:
-        job_id = jobs.create({"endpoint": "review/safety", **payload.model_dump(mode="json")}, status="queued")
+        job_payload = _prepare_job_payload(payload)
+        job_id = jobs.create({"endpoint": "review/safety", **job_payload}, status="queued")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"firestore_create_failed: {e}")
 
