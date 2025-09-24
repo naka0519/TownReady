@@ -3,7 +3,8 @@ from __future__ import annotations
 import base64
 import json
 import os
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from dataclasses import dataclass
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 import time
 import random
 
@@ -1152,8 +1153,80 @@ def _build_content(job_payload: Dict[str, Any], scenario_assets: Dict[str, Any],
         uris["video_asset_url"] = video_asset_url
     uris["by_language"] = by_lang
     return {"type": "content", "poster_prompts": poster_prompts, "video_prompt": video_prompt, "video_shotlist": shotlist, **uris}
+
+
+TaskExecutor = Callable[["TaskContext"], Dict[str, Any]]
+TASK_SEQUENCE: Tuple[str, ...] = ("plan", "scenario", "safety", "content")
+
+
+@dataclass
+class TaskContext:
+    job_id: str
+    job_payload: Dict[str, Any]
+    job_doc: Dict[str, Any]
+    storage: Optional[Storage]
+    context_summary: Optional[Dict[str, Any]]
+
+
+def _extract_scenario_assets(job_doc: Dict[str, Any]) -> Dict[str, Any]:
+    """Return the latest scenario asset bundle stored with the job."""
+
+    direct_assets = job_doc.get("assets")
+    if isinstance(direct_assets, dict):
+        return dict(direct_assets)
+    result = job_doc.get("result")
+    if isinstance(result, dict):
+        assets = result.get("assets")
+        if isinstance(assets, dict):
+            return dict(assets)
+    return {}
+
+
+def _execute_plan(ctx: TaskContext) -> Dict[str, Any]:
+    plan_payload = _build_plan(ctx.job_payload, ctx.context_summary)
+    return {"type": "plan", **plan_payload}
+
+
+def _execute_scenario(ctx: TaskContext) -> Dict[str, Any]:
+    return _build_scenario(ctx.job_id, ctx.job_payload, ctx.storage, ctx.context_summary)
+
+
+def _execute_safety(ctx: TaskContext) -> Dict[str, Any]:
+    scenario_assets = _extract_scenario_assets(ctx.job_doc)
+    return _build_safety(ctx.job_payload, scenario_assets, ctx.context_summary)
+
+
+def _execute_content(ctx: TaskContext) -> Dict[str, Any]:
+    scenario_assets = _extract_scenario_assets(ctx.job_doc)
+    return _build_content(ctx.job_payload, scenario_assets, ctx.storage, ctx.job_id)
+
+
+TASK_EXECUTORS: Dict[str, TaskExecutor] = {
+    "plan": _execute_plan,
+    "scenario": _execute_scenario,
+    "safety": _execute_safety,
+    "content": _execute_content,
+}
+
+
+def _derive_next_task(current: str) -> Optional[str]:
+    try:
+        idx = TASK_SEQUENCE.index(current)
+    except ValueError:
+        return None
+    if idx + 1 < len(TASK_SEQUENCE):
+        return TASK_SEQUENCE[idx + 1]
+    return None
+
+
 @app.post("/pubsub/push")
 def pubsub_push(body: Dict[str, Any], authorization: Optional[str] = Header(default=None)) -> Dict[str, str]:
+    settings: Optional[Settings] = None  # loaded lazily; reused for retry policy
+    job_id: Optional[str] = None
+    task = "unknown"
+    amap: Dict[str, int] = {}
+    update: Dict[str, Any] = {}
+    tname = "unknown"
     try:
         if not _verify_push(authorization):
             return {"status": "ack_error", "detail": "unauthorized"}
@@ -1182,7 +1255,7 @@ def pubsub_push(body: Dict[str, Any], authorization: Optional[str] = Header(defa
 
         jobs = JobsStore()
 
-        # Idempotency per task: skip only if this task is already completed
+        # Idempotency per task: skip if already completed
         existing = jobs.get(job_id)
         if existing:
             completed_tasks = set(existing.get("completed_tasks") or [])
@@ -1191,43 +1264,43 @@ def pubsub_push(body: Dict[str, Any], authorization: Optional[str] = Header(defa
 
         jobs.update_status(job_id, "processing", {"task": task})
 
-        # Load job payload and optional storage
         job_doc = jobs.get(job_id) or {}
+        if not job_doc:
+            raise ValueError(f"job_not_found: {job_id}")
         job_payload: Dict[str, Any] = job_doc.get("payload") or {}
-        try:
-            storage = Storage()
-        except Exception:
-            storage = None
-        # Load settings and attempt counters
+
         try:
             settings = Settings.load()
         except Exception:
             settings = None  # pragma: no cover
-        attempts_map: Dict[str, int] = {}
+
         try:
-            if isinstance(job_doc.get("attempts"), dict):
-                attempts_map = dict(job_doc.get("attempts") or {})
+            storage = Storage()
         except Exception:
-            attempts_map = {}
-        cur_attempt = int(attempts_map.get(task, 0))
+            storage = None
+
+        attempts_map: Dict[str, int] = {}
+        if isinstance(job_doc.get("attempts"), dict):
+            attempts_map = dict(job_doc.get("attempts") or {})
+        amap = attempts_map
 
         region_ctx = _load_region_context(job_payload)
         context_summary = _plan_context_summary(region_ctx) if region_ctx else None
 
-        # Route by task and build outputs
-        if task == "plan":
-            plan_payload = _build_plan(job_payload, context_summary)
-            result = {"type": "plan", **plan_payload}
-        elif task == "scenario":
-            result = _build_scenario(job_id, job_payload, storage, context_summary)
-        elif task == "safety":
-            scenario_assets = (job_doc.get("assets") or {}) or ((job_doc.get("result") or {}).get("assets") or {})
-            result = _build_safety(job_payload, scenario_assets, context_summary)
-        elif task == "content":
-            scenario_assets = (job_doc.get("assets") or {}) or ((job_doc.get("result") or {}).get("assets") or {})
-            result = _build_content(job_payload, scenario_assets, storage, job_id)
-        else:
-            result = {"type": task, "message": "Unknown task; acknowledged"}
+        executor = TASK_EXECUTORS.get(task)
+        if not executor:
+            logger.warning("unknown_task job_id=%s task=%s", job_id, task)
+            return {"status": "ack", "note": "unknown_task"}
+
+        ctx = TaskContext(
+            job_id=job_id,
+            job_payload=job_payload,
+            job_doc=job_doc,
+            storage=storage,
+            context_summary=context_summary,
+        )
+
+        result = executor(ctx)
 
         # Persist result; also persist per-task results history and top-level assets after 'scenario'
         # Merge into results map
@@ -1259,15 +1332,7 @@ def pubsub_push(body: Dict[str, Any], authorization: Optional[str] = Header(defa
         jobs.update_status(job_id, "done", extra_update)
 
         # Chain next task automatically (best-effort)
-        def _next_task(cur: str) -> Optional[str]:
-            order = ["plan", "scenario", "safety", "content"]
-            try:
-                i = order.index(cur)
-                return order[i + 1] if i + 1 < len(order) else None
-            except ValueError:
-                return None
-
-        next_t = _next_task(task)
+        next_t = _derive_next_task(task)
         if next_t:
             try:
                 pub = Publisher()
@@ -1308,13 +1373,17 @@ def pubsub_push(body: Dict[str, Any], authorization: Optional[str] = Header(defa
                 update["retry"] = {"task": tname, "attempt": amap[tname], "delay_ms": delay_ms}
         except Exception:
             pass
-        js.update_status(job_id, "error", update)
+        if job_id:
+            try:
+                js.update_status(job_id, "error", update)
+            except Exception:
+                pass
         try:
             logger.error(
                 "task_failed job_id=%s task=%s attempt=%s error=%s",
                 job_id,
                 tname,
-                amap.get(tname),
+                amap.get(tname) if 'amap' in locals() else None,
                 str(e),
             )
         except Exception:

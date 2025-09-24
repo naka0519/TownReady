@@ -1,5 +1,41 @@
+# Python / runtime artifacts
+__pycache__/
+*.py[cod]
+*.pyd
+*.so
+.pytest_cache/
+.mypy_cache/
+.coverage
+
+# Local environments
 venv/
+.venv/
+.env
+*.env
+*.env.*
+.envrc
 tmp/
 output/
+
+# Logs & reports
+logs/
+*.log
+report/
+
+# Knowledge base staging (large source datasets)
 kb/*.geojson
 kb/region_context/*.json
+
+# Node.js / Next.js
+node_modules/
+web/node_modules/
+web/.next/
+web/.turbo/
+web/out/
+web/.vercel/
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+*.egg
